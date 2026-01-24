@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { buildCommandsMessage, buildHelpMessage, buildStatusMessage } from "./status.js";
 
 afterEach(() => {
+  clearPluginCommands();
   vi.restoreAllMocks();
 });
 
@@ -422,6 +424,19 @@ describe("buildCommandsMessage", () => {
       ],
     );
     expect(text).toContain("/demo_skill - Demo skill");
+  });
+
+  it("includes plugin commands when registered", () => {
+    registerPluginCommand("plugin-core", {
+      name: "plugstatus",
+      description: "Plugin status",
+      handler: () => ({ text: "ok" }),
+    });
+    const text = buildCommandsMessage({
+      commands: { config: false, debug: false },
+    } as ClawdbotConfig);
+    expect(text).toContain("🔌 Plugin commands");
+    expect(text).toContain("/plugstatus - Plugin status");
   });
 });
 

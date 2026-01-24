@@ -6,6 +6,7 @@
  */
 
 import type { ClawdbotConfig } from "../config/config.js";
+import { listChatCommands } from "../auto-reply/commands-registry.js";
 import type { ClawdbotPluginCommandDefinition, PluginCommandContext } from "./types.js";
 import { logVerbose } from "../globals.js";
 
@@ -16,53 +17,33 @@ type RegisteredPluginCommand = ClawdbotPluginCommandDefinition & {
 // Registry of plugin commands
 const pluginCommands: Map<string, RegisteredPluginCommand> = new Map();
 
-// Lock to prevent modifications during command execution
-let registryLocked = false;
+// Lock counter to prevent modifications during command execution
+let registryLockCount = 0;
 
 // Maximum allowed length for command arguments (defense in depth)
 const MAX_ARGS_LENGTH = 4096;
 
-/**
- * Reserved command names that plugins cannot override.
- * These are built-in commands from commands-registry.data.ts.
- */
-const RESERVED_COMMANDS = new Set([
-  // Core commands
-  "help",
-  "commands",
-  "status",
-  "whoami",
-  "context",
-  // Session management
-  "stop",
-  "restart",
-  "reset",
-  "new",
-  "compact",
-  // Configuration
-  "config",
-  "debug",
-  "allowlist",
-  "activation",
-  // Agent control
-  "skill",
-  "subagents",
-  "model",
-  "models",
-  "queue",
-  // Messaging
-  "send",
-  // Execution
-  "bash",
-  "exec",
-  // Mode toggles
-  "think",
-  "verbose",
-  "reasoning",
-  "elevated",
-  // Billing
-  "usage",
-]);
+let cachedReservedCommands: Set<string> | null = null;
+
+function getReservedCommands(): Set<string> {
+  if (cachedReservedCommands) return cachedReservedCommands;
+  const reserved = new Set<string>();
+  for (const command of listChatCommands()) {
+    if (command.nativeName) {
+      const normalized = command.nativeName.trim().toLowerCase();
+      if (normalized) reserved.add(normalized);
+    }
+    for (const alias of command.textAliases ?? []) {
+      const trimmed = alias.trim();
+      if (!trimmed) continue;
+      const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+      const normalized = withoutSlash.trim().toLowerCase();
+      if (normalized) reserved.add(normalized);
+    }
+  }
+  cachedReservedCommands = reserved;
+  return reserved;
+}
 
 /**
  * Validate a command name.
@@ -82,7 +63,7 @@ export function validateCommandName(name: string): string | null {
   }
 
   // Check reserved commands
-  if (RESERVED_COMMANDS.has(trimmed)) {
+  if (getReservedCommands().has(trimmed)) {
     return `Command name "${trimmed}" is reserved by a built-in command`;
   }
 
@@ -103,7 +84,7 @@ export function registerPluginCommand(
   command: ClawdbotPluginCommandDefinition,
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (registryLocked) {
+  if (registryLockCount > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
@@ -117,7 +98,8 @@ export function registerPluginCommand(
     return { ok: false, error: validationError };
   }
 
-  const key = `/${command.name.toLowerCase()}`;
+  const normalizedName = command.name.trim();
+  const key = `/${normalizedName.toLowerCase()}`;
 
   // Check for duplicate registration
   if (pluginCommands.has(key)) {
@@ -128,7 +110,7 @@ export function registerPluginCommand(
     };
   }
 
-  pluginCommands.set(key, { ...command, pluginId });
+  pluginCommands.set(key, { ...command, name: normalizedName, pluginId });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };
 }
@@ -139,6 +121,7 @@ export function registerPluginCommand(
  */
 export function clearPluginCommands(): void {
   pluginCommands.clear();
+  registryLockCount = 0;
 }
 
 /**
@@ -190,12 +173,28 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   if (!args) return undefined;
 
   // Enforce length limit
-  if (args.length > MAX_ARGS_LENGTH) {
-    return args.slice(0, MAX_ARGS_LENGTH);
-  }
+  const trimmed = args.length > MAX_ARGS_LENGTH ? args.slice(0, MAX_ARGS_LENGTH) : args;
 
   // Remove control characters (except newlines and tabs which may be intentional)
-  return args.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  let needsSanitize = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    if (code === 0x09 || code === 0x0a) continue;
+    if (code < 0x20 || code === 0x7f) {
+      needsSanitize = true;
+      break;
+    }
+  }
+  if (!needsSanitize) return trimmed;
+
+  let sanitized = "";
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const code = trimmed.charCodeAt(i);
+    if (code === 0x09 || code === 0x0a || (code >= 0x20 && code !== 0x7f)) {
+      sanitized += trimmed[i];
+    }
+  }
+  return sanitized;
 }
 
 /**
@@ -237,7 +236,7 @@ export async function executePluginCommand(params: {
   };
 
   // Lock registry during execution to prevent concurrent modifications
-  registryLocked = true;
+  registryLockCount += 1;
   try {
     const result = await command.handler(ctx);
     logVerbose(
@@ -250,7 +249,7 @@ export async function executePluginCommand(params: {
     // Don't leak internal error details - return a safe generic message
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
-    registryLocked = false;
+    registryLockCount = Math.max(0, registryLockCount - 1);
   }
 }
 

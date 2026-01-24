@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Browser: add node-host proxy auto-routing for remote gateways (configurable per gateway/node).
 - Plugins: add optional llm-task JSON-only tool for workflows. (#1498) Thanks @vignesh07.
+- Plugins: add LLM-free plugin slash commands and include them in `/commands`. (#1558) Thanks @Glucksberg.
 - CLI: restart the gateway by default after `clawdbot update`; add `--no-restart` to skip it.
 - CLI: add live auth probes to `clawdbot models status` for per-profile verification.
 - CLI: add `clawdbot system` for system events + heartbeat controls; remove standalone `wake`.

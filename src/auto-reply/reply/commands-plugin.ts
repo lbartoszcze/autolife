@@ -15,8 +15,9 @@ import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
  */
 export const handlePluginCommand: CommandHandler = async (
   params,
-  _allowTextCommands,
+  allowTextCommands,
 ): Promise<CommandHandlerResult | null> => {
+  if (!allowTextCommands) return null;
   const { command, cfg } = params;
 
   // Try to match a plugin command

@@ -376,7 +376,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     // Register with the plugin command system (validates name and checks for duplicates)
-    const result = registerPluginCommand(record.id, command);
+    const normalizedCommand = { ...command, name };
+    const result = registerPluginCommand(record.id, normalizedCommand);
     if (!result.ok) {
       pushDiagnostic({
         level: "error",
@@ -390,7 +391,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.commands.push(name);
     registry.commands.push({
       pluginId: record.id,
-      command,
+      command: normalizedCommand,
       source: record.source,
     });
   };
