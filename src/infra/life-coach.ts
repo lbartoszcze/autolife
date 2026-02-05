@@ -21,6 +21,12 @@ type TranscriptMessage = {
 
 type LifeCoachNeedScores = Record<LifeCoachObjective, number>;
 
+type LifeCoachAffectScores = {
+  frustration: number;
+  distress: number;
+  momentum: number;
+};
+
 type LifeCoachStats = Record<
   LifeCoachInterventionId,
   {
@@ -38,14 +44,23 @@ type LifeCoachHistoryEntry = {
   status: "sent" | "completed" | "ignored" | "rejected";
   followUpMinutes: number;
   followUpSentAt?: number;
+  tone?: ResolvedTone;
   note?: string;
 };
 
+type LifeCoachPreferenceModel = {
+  objectiveBias: Record<LifeCoachObjective, number>;
+  interventionAffinity: Record<LifeCoachInterventionId, number>;
+  supportiveToneBias: number;
+  lastLearnedMessageTs: number;
+};
+
 type LifeCoachStateFile = {
-  version: 1;
+  version: 2;
   updatedAt: number;
   history: LifeCoachHistoryEntry[];
   stats: LifeCoachStats;
+  preferences: LifeCoachPreferenceModel;
 };
 
 type InterventionSpec = {
@@ -56,6 +71,8 @@ type InterventionSpec = {
   followUpMinutes: number;
   action: (params: { needs: LifeCoachNeedScores; tone: ResolvedTone }) => string;
   fallback: string;
+  evidenceNote: string;
+  toolHint: string;
 };
 
 type ResolvedTone = "supportive" | "direct";
@@ -71,6 +88,9 @@ export type LifeCoachDecision = {
   tone: ResolvedTone;
   soraPrompt?: string;
   needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  evidenceNote: string;
+  toolHint: string;
 };
 
 export type LifeCoachHeartbeatPlan = {
@@ -163,6 +183,36 @@ const SOCIAL_URGE_HINTS = [
 ];
 const MOVEMENT_HINTS = ["walk", "outside", "steps", "exercise", "workout", "run"];
 
+const FRUSTRATION_HINTS = [
+  "frustrated",
+  "annoying",
+  "irritated",
+  "angry",
+  "stuck",
+  "this is not working",
+];
+
+const GOAL_CUES = ["want", "goal", "trying to", "need to", "would like", "prefer", "helps", "works"];
+const AVOID_CUES = ["don't", "do not", "can't", "cannot", "hate", "dislike", "annoying", "frustrating", "stop"];
+
+const INTERVENTION_KEYWORDS: Record<LifeCoachInterventionId, string[]> = {
+  walk: ["walk", "outside", "steps", "exercise", "move"],
+  "social-block": ["social media", "instagram", "tiktok", "twitter", "x.com", "scroll"],
+  "focus-sprint": ["focus", "deep work", "pomodoro", "task", "procrastinating"],
+  breathing: ["breathing", "breath", "calm", "anxious", "panic"],
+  hydration: ["water", "hydrate", "dehydrated", "drink"],
+  "sora-visualization": ["visualization", "future self", "sora", "video"],
+};
+
+const OBJECTIVE_KEYWORDS: Record<LifeCoachObjective, string[]> = {
+  mood: ["happy", "better", "mood", "sad", "down", "lonely"],
+  energy: ["energy", "tired", "fatigue", "exhausted", "sleepy"],
+  focus: ["focus", "distracted", "procrastinating", "productive"],
+  movement: ["walk", "outside", "exercise", "steps", "workout"],
+  socialMediaReduction: ["social media", "instagram", "tiktok", "twitter", "scrolling", "doomscroll"],
+  stressRegulation: ["stress", "anxious", "panic", "calm", "overwhelmed"],
+};
+
 const INTERVENTIONS: InterventionSpec[] = [
   {
     id: "walk",
@@ -190,6 +240,9 @@ const INTERVENTIONS: InterventionSpec[] = [
         : `Start a ${duration}-minute walk now. Keep your phone in pocket and no social feeds during the walk.`;
     },
     fallback: "If going outside is hard right now, do a 5-minute indoor walk and reopen this conversation.",
+    evidenceNote:
+      "Brief outdoor movement and light exposure are associated with better mood regulation and improved attentional control.",
+    toolHint: "Use a 10-20 minute timer and enable Do Not Disturb before starting the walk.",
   },
   {
     id: "social-block",
@@ -213,6 +266,9 @@ const INTERVENTIONS: InterventionSpec[] = [
         : `Block social media for ${duration} minutes now. Immediately switch to one offline task for 10 minutes.`;
     },
     fallback: "If you cannot block apps, put the phone in another room for 15 minutes.",
+    evidenceNote:
+      "Reducing access to high-cue apps lowers compulsive checking and improves sustained attention in the next task window.",
+    toolHint: "Start an app/site blocker profile for 30-45 minutes and launch one offline next action.",
   },
   {
     id: "focus-sprint",
@@ -236,6 +292,10 @@ const INTERVENTIONS: InterventionSpec[] = [
         : `Start one ${minutes}-minute deep-focus sprint now. Single task, notifications off, no social tabs.`;
     },
     fallback: "If focus is very low, do a 5-minute starter sprint and report what was completed.",
+    evidenceNote:
+      "Time-boxed single-task sprints reduce initiation friction and can decrease procrastination through clear stopping points.",
+    toolHint:
+      "Start a single-task timer (15-25 minutes), close social tabs, and keep only the current task visible.",
   },
   {
     id: "breathing",
@@ -257,6 +317,9 @@ const INTERVENTIONS: InterventionSpec[] = [
         ? "Do 3 minutes of 4-6 breathing now (inhale 4s, exhale 6s), then drink water."
         : "Do 3 minutes of 4-6 breathing right now. Then send a one-line check-in.",
     fallback: "If breathing feels hard, do 90 seconds of slow exhales only.",
+    evidenceNote:
+      "Slow exhale breathing can reduce acute sympathetic arousal and improve short-term emotional regulation.",
+    toolHint: "Use a breath timer/metronome for 3 minutes with 4-second inhale and 6-second exhale cadence.",
   },
   {
     id: "hydration",
@@ -280,6 +343,9 @@ const INTERVENTIONS: InterventionSpec[] = [
         ? "Drink a full glass of water, stand up for 2 minutes, and open a window or get daylight."
         : "Hydrate now: one full glass of water, 2 minutes standing, then one concrete next task.",
     fallback: "If water is not available, do the 2-minute stand + daylight reset first.",
+    evidenceNote:
+      "Hydration plus a brief posture/light reset can improve perceived alertness and readiness for cognitive work.",
+    toolHint: "Set a 2-minute stand timer, drink water, then write the next task in one sentence.",
   },
   {
     id: "sora-visualization",
@@ -302,14 +368,33 @@ const INTERVENTIONS: InterventionSpec[] = [
         ? "Watch a short future-self visualization (or imagine it for 60 seconds), then take the first tiny action immediately."
         : "Use a 20-40s future-self visualization, then execute the first concrete action within 60 seconds.",
     fallback: "If video generation is unavailable, run a 60-second guided mental visualization instead.",
+    evidenceNote:
+      "Future-self visualization can increase motivation when paired with an immediate concrete follow-through step.",
+    toolHint:
+      "Generate a short desired-state video or run a 60-second mental scene, then trigger a 5-minute action timer.",
   },
 ];
+
+const INTERVENTION_BY_ID: Record<LifeCoachInterventionId, InterventionSpec> = INTERVENTIONS.reduce(
+  (acc, spec) => {
+    acc[spec.id] = spec;
+    return acc;
+  },
+  {} as Record<LifeCoachInterventionId, InterventionSpec>,
+);
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
   }
   return Math.max(0, Math.min(1, value));
+}
+
+function clampSigned(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(-1, Math.min(1, value));
 }
 
 function round2(value: number): number {
@@ -419,19 +504,43 @@ function emptyStats(): LifeCoachStats {
   };
 }
 
+function emptyPreferenceModel(): LifeCoachPreferenceModel {
+  return {
+    objectiveBias: {
+      mood: 0,
+      energy: 0,
+      focus: 0,
+      movement: 0,
+      socialMediaReduction: 0,
+      stressRegulation: 0,
+    },
+    interventionAffinity: {
+      walk: 0,
+      "social-block": 0,
+      "focus-sprint": 0,
+      breathing: 0,
+      hydration: 0,
+      "sora-visualization": 0,
+    },
+    supportiveToneBias: 0,
+    lastLearnedMessageTs: 0,
+  };
+}
+
 function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
   const base: LifeCoachStateFile = {
-    version: 1,
+    version: 2,
     updatedAt: now,
     history: [],
     stats: emptyStats(),
+    preferences: emptyPreferenceModel(),
   };
   if (!raw || typeof raw !== "object") {
     return base;
   }
   const value = raw as Partial<LifeCoachStateFile>;
   const normalized: LifeCoachStateFile = {
-    version: 1,
+    version: 2,
     updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : now,
     history: Array.isArray(value.history)
       ? value.history.filter((entry): entry is LifeCoachHistoryEntry => {
@@ -444,6 +553,7 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
             typeof candidate.sentAt === "number" &&
             typeof candidate.intervention === "string" &&
             (candidate.followUpSentAt === undefined || typeof candidate.followUpSentAt === "number") &&
+            (candidate.tone === undefined || candidate.tone === "supportive" || candidate.tone === "direct") &&
             (candidate.status === "sent" ||
               candidate.status === "completed" ||
               candidate.status === "ignored" ||
@@ -452,6 +562,7 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
         })
       : [],
     stats: emptyStats(),
+    preferences: emptyPreferenceModel(),
   };
   const sourceStats = value.stats;
   if (sourceStats && typeof sourceStats === "object") {
@@ -475,31 +586,66 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
       };
     }
   }
+  const sourcePreferences = (value as { preferences?: unknown }).preferences;
+  if (sourcePreferences && typeof sourcePreferences === "object") {
+    const typed = sourcePreferences as Partial<LifeCoachPreferenceModel>;
+    const objectiveBias = typed.objectiveBias as Partial<Record<LifeCoachObjective, number>> | undefined;
+    const interventionAffinity = typed.interventionAffinity as
+      | Partial<Record<LifeCoachInterventionId, number>>
+      | undefined;
+    for (const objective of Object.keys(normalized.preferences.objectiveBias) as LifeCoachObjective[]) {
+      const valueForObjective = objectiveBias?.[objective];
+      if (typeof valueForObjective === "number") {
+        normalized.preferences.objectiveBias[objective] = clampSigned(valueForObjective);
+      }
+    }
+    for (const intervention of Object.keys(
+      normalized.preferences.interventionAffinity,
+    ) as LifeCoachInterventionId[]) {
+      const valueForIntervention = interventionAffinity?.[intervention];
+      if (typeof valueForIntervention === "number") {
+        normalized.preferences.interventionAffinity[intervention] = clampSigned(valueForIntervention);
+      }
+    }
+    if (typeof typed.supportiveToneBias === "number") {
+      normalized.preferences.supportiveToneBias = clampSigned(typed.supportiveToneBias);
+    }
+    if (typeof typed.lastLearnedMessageTs === "number" && typed.lastLearnedMessageTs > 0) {
+      normalized.preferences.lastLearnedMessageTs = typed.lastLearnedMessageTs;
+    }
+  }
   return normalized;
 }
 
 function resolveFollowUpAction(params: {
   intervention: LifeCoachInterventionId;
   tone: ResolvedTone;
+  actionContract: {
+    enabled: boolean;
+    doneToken: string;
+    helpToken: string;
+  };
 }): string {
   const directPrefix = "Follow-up check now:";
   const supportivePrefix = "Quick check-in:";
   const prefix = params.tone === "supportive" ? supportivePrefix : directPrefix;
+  const doneToken = params.actionContract.enabled ? params.actionContract.doneToken : "done";
+  const helpToken = params.actionContract.enabled ? params.actionContract.helpToken : "need help";
   switch (params.intervention) {
     case "walk":
-      return `${prefix} did you complete the walk? If not, do a 7-minute version now and reply DONE.`;
+      return `${prefix} did you complete the walk? If not, do a 7-minute version now and reply ${doneToken}.`;
     case "social-block":
-      return `${prefix} are distracting social apps still blocked? If not, block for 20 minutes now and reply DONE or NEED HELP.`;
+      return `${prefix} are distracting social apps still blocked? If not, block for 20 minutes now and reply ${doneToken} or ${helpToken}.`;
     case "focus-sprint":
       return `${prefix} did the focus sprint happen? If not, run a 10-minute sprint now and send one line of progress.`;
     case "breathing":
       return `${prefix} take 2 minutes of slow breathing now and confirm when finished.`;
     case "hydration":
-      return `${prefix} drink one full glass of water now and reply DONE.`;
+      return `${prefix} drink one full glass of water now and reply ${doneToken}.`;
     case "sora-visualization":
-      return `${prefix} run the 60-second desired-state visualization and start one immediate action, then reply DONE.`;
+      return `${prefix} run the 60-second desired-state visualization and start one immediate action, then reply ${doneToken}.`;
     default:
-      return `${prefix} complete the next tiny step now and reply DONE.`;
+      return `${prefix} complete the next tiny step now and reply ${doneToken}.`;
   }
 }
 
@@ -556,6 +702,45 @@ function resolveObjectives(cfg?: HeartbeatLifeCoachConfig): Record<LifeCoachObje
   return merged;
 }
 
+function applyObjectivePreferenceBias(params: {
+  objectives: Record<LifeCoachObjective, number>;
+  preferences: LifeCoachPreferenceModel;
+}): Record<LifeCoachObjective, number> {
+  const merged = { ...params.objectives };
+  for (const objective of Object.keys(merged) as LifeCoachObjective[]) {
+    const bias = params.preferences.objectiveBias[objective] ?? 0;
+    merged[objective] = Math.max(0, Math.min(2, round2(merged[objective] * (1 + bias * 0.35))));
+  }
+  return merged;
+}
+
+function applyPreferenceDecay(state: LifeCoachStateFile, now: number): void {
+  const elapsedMs = Math.max(0, now - state.updatedAt);
+  if (elapsedMs <= 0) {
+    return;
+  }
+  const elapsedDays = elapsedMs / (24 * 60 * 60_000);
+  if (elapsedDays < 0.25) {
+    return;
+  }
+  const retention = Math.pow(0.96, elapsedDays);
+  for (const objective of Object.keys(state.preferences.objectiveBias) as LifeCoachObjective[]) {
+    state.preferences.objectiveBias[objective] = round2(
+      clampSigned(state.preferences.objectiveBias[objective] * retention),
+    );
+  }
+  for (const intervention of Object.keys(
+    state.preferences.interventionAffinity,
+  ) as LifeCoachInterventionId[]) {
+    state.preferences.interventionAffinity[intervention] = round2(
+      clampSigned(state.preferences.interventionAffinity[intervention] * retention),
+    );
+  }
+  state.preferences.supportiveToneBias = round2(
+    clampSigned(state.preferences.supportiveToneBias * retention),
+  );
+}
+
 function resolveActionContract(cfg?: HeartbeatLifeCoachConfig): {
   enabled: boolean;
   doneToken: string;
@@ -567,14 +752,30 @@ function resolveActionContract(cfg?: HeartbeatLifeCoachConfig): {
   return { enabled, doneToken, helpToken };
 }
 
-function resolveTone(cfg: HeartbeatLifeCoachConfig | undefined, needs: LifeCoachNeedScores): ResolvedTone {
+function resolveTone(params: {
+  cfg: HeartbeatLifeCoachConfig | undefined;
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  preferences: LifeCoachPreferenceModel;
+}): ResolvedTone {
+  const cfg = params.cfg;
   if (cfg?.tone === "supportive") {
     return "supportive";
   }
   if (cfg?.tone === "direct") {
     return "direct";
   }
-  const stressLoad = (needs.stressRegulation + needs.mood) / 2;
+  if (
+    params.affect.distress >= 0.65 ||
+    params.affect.frustration >= 0.6 ||
+    params.preferences.supportiveToneBias >= 0.35
+  ) {
+    return "supportive";
+  }
+  if (params.preferences.supportiveToneBias <= -0.35 && params.affect.distress < 0.45) {
+    return "direct";
+  }
+  const stressLoad = (params.needs.stressRegulation + params.needs.mood) / 2;
   return stressLoad >= 0.6 ? "supportive" : "direct";
 }
 
@@ -634,6 +835,37 @@ function estimateNeeds(messages: TranscriptMessage[]): LifeCoachNeedScores {
   };
 }
 
+function estimateAffect(
+  messages: TranscriptMessage[],
+  needs: LifeCoachNeedScores,
+): LifeCoachAffectScores {
+  const recentUsers = messages.filter((msg) => msg.role === "user").slice(-20);
+  if (recentUsers.length === 0) {
+    return {
+      frustration: round2(clamp01((needs.focus + needs.stressRegulation) / 2.6)),
+      distress: round2(clamp01((needs.stressRegulation + needs.mood) / 2)),
+      momentum: round2(clamp01(0.35 - needs.focus * 0.2 + (1 - needs.energy) * 0.1)),
+    };
+  }
+  const denom = Math.max(1, recentUsers.length * 2);
+  const frustrationHits =
+    countMentions(recentUsers, FRUSTRATION_HINTS) + countMentions(recentUsers, REJECTION_HINTS);
+  const distressHits = countMentions(recentUsers, STRESS_HINTS) + countMentions(recentUsers, LOW_MOOD_HINTS);
+  const positiveHits = countMentions(recentUsers, POSITIVE_HINTS) + countMentions(recentUsers, COMPLETION_HINTS);
+  const frustration = clamp01(frustrationHits / denom + needs.focus / 4 + needs.stressRegulation / 4);
+  const distress = clamp01(
+    distressHits / denom + needs.stressRegulation * 0.4 + needs.mood * 0.3 - positiveHits / (denom * 2),
+  );
+  const momentum = clamp01(
+    positiveHits / denom + (1 - needs.focus) * 0.3 + (1 - needs.energy) * 0.2 - frustration / 4,
+  );
+  return {
+    frustration: round2(frustration),
+    distress: round2(distress),
+    momentum: round2(momentum),
+  };
+}
+
 function countNudgesInWindow(state: LifeCoachStateFile, now: number, windowMs: number): number {
   return state.history.filter((entry) => now - entry.sentAt <= windowMs).length;
 }
@@ -658,17 +890,188 @@ function rejectionRisk(stats: LifeCoachStats[LifeCoachInterventionId]): number {
   return clamp01(stats.rejected / stats.sent);
 }
 
+function learnPreferencesFromMessages(params: {
+  state: LifeCoachStateFile;
+  messages: TranscriptMessage[];
+}): void {
+  const learnable = params.messages.filter(
+    (msg) =>
+      msg.role === "user" &&
+      typeof msg.timestamp === "number" &&
+      msg.timestamp > params.state.preferences.lastLearnedMessageTs,
+  );
+  if (learnable.length === 0) {
+    return;
+  }
+  let maxTimestamp = params.state.preferences.lastLearnedMessageTs;
+  for (const message of learnable) {
+    const text = message.text;
+    const positiveCueHits = countHintMatches(text, GOAL_CUES);
+    const avoidCueHits = countHintMatches(text, AVOID_CUES);
+    const completionHits = countHintMatches(text, COMPLETION_HINTS);
+    const frustrationHits = countHintMatches(text, REJECTION_HINTS) + countHintMatches(text, FRUSTRATION_HINTS);
+
+    for (const objective of Object.keys(OBJECTIVE_KEYWORDS) as LifeCoachObjective[]) {
+      const mentions = countHintMatches(text, OBJECTIVE_KEYWORDS[objective]);
+      if (mentions <= 0) {
+        continue;
+      }
+      const upDelta = positiveCueHits > 0 ? 0.03 * mentions * positiveCueHits : 0;
+      const downDelta = avoidCueHits > 0 ? 0.02 * mentions * avoidCueHits : 0;
+      params.state.preferences.objectiveBias[objective] = round2(
+        clampSigned(params.state.preferences.objectiveBias[objective] + upDelta - downDelta),
+      );
+    }
+    for (const intervention of Object.keys(INTERVENTION_KEYWORDS) as LifeCoachInterventionId[]) {
+      const mentions = countHintMatches(text, INTERVENTION_KEYWORDS[intervention]);
+      if (mentions <= 0) {
+        continue;
+      }
+      let delta = 0;
+      if (positiveCueHits > 0) {
+        delta += 0.03 * positiveCueHits;
+      }
+      if (avoidCueHits > 0) {
+        delta -= 0.05 * avoidCueHits;
+      }
+      if (completionHits > 0) {
+        delta += 0.04;
+      }
+      if (frustrationHits > 0) {
+        delta -= 0.02 * frustrationHits;
+      }
+      params.state.preferences.interventionAffinity[intervention] = round2(
+        clampSigned(params.state.preferences.interventionAffinity[intervention] + delta * mentions),
+      );
+    }
+    if (frustrationHits > 0) {
+      params.state.preferences.supportiveToneBias = round2(
+        clampSigned(params.state.preferences.supportiveToneBias + 0.08 * frustrationHits),
+      );
+    } else if (completionHits > 0) {
+      params.state.preferences.supportiveToneBias = round2(
+        clampSigned(params.state.preferences.supportiveToneBias - 0.03),
+      );
+    }
+    if (typeof message.timestamp === "number" && message.timestamp > maxTimestamp) {
+      maxTimestamp = message.timestamp;
+    }
+  }
+  params.state.preferences.lastLearnedMessageTs = maxTimestamp;
+}
+
+function learnPreferencesFromOutcome(params: {
+  state: LifeCoachStateFile;
+  intervention: LifeCoachInterventionId;
+  status: LifeCoachHistoryEntry["status"];
+  tone?: ResolvedTone;
+}): void {
+  if (params.status === "sent") {
+    return;
+  }
+  const affinityDelta =
+    params.status === "completed" ? 0.08 : params.status === "ignored" ? -0.04 : -0.1;
+  params.state.preferences.interventionAffinity[params.intervention] = round2(
+    clampSigned(params.state.preferences.interventionAffinity[params.intervention] + affinityDelta),
+  );
+  const spec = INTERVENTION_BY_ID[params.intervention];
+  if (spec) {
+    for (const objective of Object.keys(spec.effects) as LifeCoachObjective[]) {
+      const effect = spec.effects[objective] ?? 0;
+      const delta = params.status === "completed" ? effect * 0.03 : params.status === "rejected" ? -effect * 0.02 : 0;
+      if (!delta) {
+        continue;
+      }
+      params.state.preferences.objectiveBias[objective] = round2(
+        clampSigned(params.state.preferences.objectiveBias[objective] + delta),
+      );
+    }
+  }
+  if (params.status === "rejected") {
+    const toneDelta = params.tone === "direct" ? 0.08 : 0.03;
+    params.state.preferences.supportiveToneBias = round2(
+      clampSigned(params.state.preferences.supportiveToneBias + toneDelta),
+    );
+  } else if (params.status === "completed" && params.tone === "direct") {
+    params.state.preferences.supportiveToneBias = round2(
+      clampSigned(params.state.preferences.supportiveToneBias - 0.04),
+    );
+  }
+}
+
+function computeInterventionFatigue(
+  state: LifeCoachStateFile,
+  intervention: LifeCoachInterventionId,
+): number {
+  const recent = state.history
+    .filter((entry) => entry.intervention === intervention)
+    .toReversed()
+    .slice(0, 5);
+  if (recent.length === 0) {
+    return 0;
+  }
+  let penalty = 0;
+  for (let i = 0; i < recent.length; i += 1) {
+    const entry = recent[i];
+    const weight = Math.max(0.2, 1 - i * 0.18);
+    if (entry.status === "rejected") {
+      penalty += 0.36 * weight;
+    } else if (entry.status === "ignored") {
+      penalty += 0.24 * weight;
+    } else if (entry.status === "sent") {
+      penalty += 0.1 * weight;
+    } else if (entry.status === "completed") {
+      penalty -= 0.18 * weight;
+    }
+  }
+  return clamp01(penalty);
+}
+
+function adjustFollowUpMinutes(baseFollowUpMinutes: number, affect: LifeCoachAffectScores): number {
+  let followUp = baseFollowUpMinutes;
+  if (affect.frustration > 0.65) {
+    followUp += 10;
+  }
+  if (affect.distress > 0.7) {
+    followUp += 5;
+  }
+  if (affect.momentum > 0.7) {
+    followUp -= 5;
+  }
+  return Math.max(10, Math.min(120, followUp));
+}
+
 function resolveSoraPrompt(decision: {
   intervention: LifeCoachInterventionId;
   needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
 }): string | undefined {
   if (decision.intervention !== "sora-visualization") {
     return undefined;
   }
+  const topNeed = (Object.entries(decision.needs) as Array<[LifeCoachObjective, number]>).toSorted(
+    (a, b) => b[1] - a[1],
+  )[0]?.[0];
+  const openingBeat =
+    topNeed === "socialMediaReduction"
+      ? "phone is placed face down in another room"
+      : topNeed === "focus"
+        ? "single task is opened with notifications off"
+        : topNeed === "stressRegulation"
+          ? "breath slows and shoulders relax"
+          : topNeed === "movement"
+            ? "user steps outside and begins walking"
+            : "user starts one clear, immediate action";
+  const emotionalTone =
+    decision.affect.distress > 0.65
+      ? "gentle, grounded, emotionally safe"
+      : decision.affect.momentum > 0.65
+        ? "energizing, forward-moving, practical"
+        : "calm, confident, non-preachy";
   return (
-    "Create a 20-30 second grounded, realistic first-person scene: user puts phone away, " +
-    "steps outside for a short walk, breath slows, sunlight on face, then opens laptop and starts one focused task. " +
-    "Tone: calm, confident, non-preachy, no flashy effects, emphasize immediate next action."
+    "Create a 20-30 second grounded first-person scene where the user shifts from friction to action: " +
+    `${openingBeat}, followed by one visible next step that starts within 60 seconds. ` +
+    `Tone: ${emotionalTone}, realistic pacing, no flashy effects, emphasize immediate execution.`
   );
 }
 
@@ -745,13 +1148,21 @@ function updatePendingOutcomes(params: {
   } else if (nextStatus === "rejected") {
     stat.rejected += 1;
   }
+  learnPreferencesFromOutcome({
+    state: params.state,
+    intervention: pending.intervention,
+    status: nextStatus,
+    tone: pending.tone,
+  });
 }
 
 function selectIntervention(params: {
   activeInterventions: InterventionSpec[];
   needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
   objectives: Record<LifeCoachObjective, number>;
   state: LifeCoachStateFile;
+  preferences: LifeCoachPreferenceModel;
   tone: ResolvedTone;
   relapsePressure: number;
   now: number;
@@ -768,6 +1179,8 @@ function selectIntervention(params: {
     const stats = params.state.stats[spec.id];
     const completionProb = completionProbability(stats, params.tone);
     const reactance = rejectionRisk(stats);
+    const preferenceAffinity = params.preferences.interventionAffinity[spec.id] ?? 0;
+    const fatigue = computeInterventionFatigue(params.state, spec.id);
 
     let expectedGain = 0;
     for (const objective of Object.keys(params.objectives) as LifeCoachObjective[]) {
@@ -778,7 +1191,10 @@ function selectIntervention(params: {
       expectedGain += need * objectiveWeight * effect * alignment;
     }
 
-    const friction = spec.baseFriction + (params.needs.energy > 0.75 ? 0.08 : 0);
+    const friction =
+      spec.baseFriction +
+      (params.needs.energy > 0.75 ? 0.08 : 0) +
+      (params.affect.frustration > 0.55 && spec.baseFriction > 0.28 ? 0.1 : 0);
     const relapseBoost =
       params.relapsePressure > 0.45 && params.needs.socialMediaReduction > 0.6
         ? spec.id === "walk" || spec.id === "breathing"
@@ -787,10 +1203,29 @@ function selectIntervention(params: {
             ? 0.05
             : 0
         : 0;
-    const score = expectedGain * (0.6 + completionProb) - friction - reactance * 0.35 + relapseBoost;
+    const distressBoost =
+      params.affect.distress > 0.55 &&
+      (spec.id === "breathing" || spec.id === "walk" || spec.id === "hydration")
+        ? 0.1
+        : 0;
+    const momentumBoost =
+      params.affect.momentum > 0.6 && (spec.id === "focus-sprint" || spec.id === "social-block")
+        ? 0.08
+        : 0;
+    const score =
+      expectedGain * (0.6 + completionProb) -
+      friction -
+      reactance * 0.35 -
+      fatigue * 0.24 +
+      relapseBoost +
+      distressBoost +
+      momentumBoost +
+      preferenceAffinity * 0.18;
     const rationale =
       `expectedGain=${round2(expectedGain)}, completion=${round2(completionProb)}, ` +
-      `friction=${round2(friction)}, reactance=${round2(reactance)}, relapse=${round2(params.relapsePressure)}`;
+      `friction=${round2(friction)}, reactance=${round2(reactance)}, fatigue=${round2(fatigue)}, ` +
+      `affinity=${round2(preferenceAffinity)}, relapse=${round2(params.relapsePressure)}, ` +
+      `frustration=${round2(params.affect.frustration)}, distress=${round2(params.affect.distress)}`;
 
     if (!best || score > best.score) {
       best = { spec, score, rationale };
@@ -802,6 +1237,7 @@ function selectIntervention(params: {
   }
 
   const action = best.spec.action({ needs: params.needs, tone: params.tone });
+  const followUpMinutes = adjustFollowUpMinutes(best.spec.followUpMinutes, params.affect);
   return {
     phase: "initial",
     intervention: best.spec.id,
@@ -809,18 +1245,32 @@ function selectIntervention(params: {
     rationale: best.rationale,
     action,
     fallback: best.spec.fallback,
-    followUpMinutes: best.spec.followUpMinutes,
+    followUpMinutes,
     tone: params.tone,
-    soraPrompt: resolveSoraPrompt({ intervention: best.spec.id, needs: params.needs }),
+    soraPrompt: resolveSoraPrompt({
+      intervention: best.spec.id,
+      needs: params.needs,
+      affect: params.affect,
+    }),
     needs: params.needs,
+    affect: params.affect,
+    evidenceNote: best.spec.evidenceNote,
+    toolHint: best.spec.toolHint,
   };
 }
 
 function createFollowUpDecision(params: {
   pending: LifeCoachHistoryEntry;
   needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
   tone: ResolvedTone;
+  actionContract: {
+    enabled: boolean;
+    doneToken: string;
+    helpToken: string;
+  };
 }): LifeCoachDecision {
+  const spec = INTERVENTION_BY_ID[params.pending.intervention];
   return {
     phase: "follow-up",
     intervention: params.pending.intervention,
@@ -829,18 +1279,36 @@ function createFollowUpDecision(params: {
     action: resolveFollowUpAction({
       intervention: params.pending.intervention,
       tone: params.tone,
+      actionContract: params.actionContract,
     }),
     fallback: "If completion is blocked, ask for a smaller 5-minute fallback and keep the tone supportive.",
     followUpMinutes: Math.max(5, params.pending.followUpMinutes),
     tone: params.tone,
     needs: params.needs,
+    affect: params.affect,
+    evidenceNote: spec?.evidenceNote ?? "Keep the follow-up action simple, specific, and low-friction.",
+    toolHint: spec?.toolHint ?? "Offer a timer-based 5-minute fallback if the user is blocked.",
   };
+}
+
+function formatPreferenceSnapshot(preferences: LifeCoachPreferenceModel): string {
+  const entries = Object.entries(preferences.interventionAffinity)
+    .map(([key, value]) => [key, round2(value)] as const)
+    .toSorted((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 3)
+    .map(([key, value]) => `${key}=${value}`);
+  if (!entries.length) {
+    return "no learned preferences yet";
+  }
+  return `${entries.join(", ")}; toneBias=${round2(preferences.supportiveToneBias)}`;
 }
 
 function buildPrompt(params: {
   basePrompt: string;
   decision?: LifeCoachDecision;
   needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  preferences: LifeCoachPreferenceModel;
   blockedReason?: string;
   actionContract: {
     enabled: boolean;
@@ -849,12 +1317,16 @@ function buildPrompt(params: {
   };
 }): string {
   const needsLine = `State estimate (0..1 need severity): mood=${params.needs.mood}, energy=${params.needs.energy}, focus=${params.needs.focus}, movement=${params.needs.movement}, socialMediaReduction=${params.needs.socialMediaReduction}, stressRegulation=${params.needs.stressRegulation}.`;
+  const affectLine = `Affect estimate (0..1): frustration=${params.affect.frustration}, distress=${params.affect.distress}, momentum=${params.affect.momentum}.`;
+  const preferenceLine = `Preference model: ${formatPreferenceSnapshot(params.preferences)}.`;
   if (!params.decision) {
     const reason = params.blockedReason ? ` Reason: ${params.blockedReason}.` : "";
     return (
       `${params.basePrompt}\n\n` +
       "[AUTOLIFE LIFECOACH]\n" +
       `${needsLine}\n` +
+      `${affectLine}\n` +
+      `${preferenceLine}\n` +
       `Dynamic intervention is active but no nudge should be sent this cycle.${reason}\n` +
       "If HEARTBEAT.md has no actionable tasks, reply HEARTBEAT_OK."
     );
@@ -865,15 +1337,20 @@ function buildPrompt(params: {
     "",
     "[AUTOLIFE LIFECOACH]",
     needsLine,
+    affectLine,
+    preferenceLine,
     `Selected intervention: ${params.decision.intervention} (score=${params.decision.score}).`,
     `Intervention phase: ${params.decision.phase}.`,
     `Tone: ${params.decision.tone}.`,
+    `Evidence note: ${params.decision.evidenceNote}`,
+    `Tool execution hint: ${params.decision.toolHint}`,
     `Primary action: ${params.decision.action}`,
     `Fallback action: ${params.decision.fallback}`,
     `Ask for a concrete check-in in ~${params.decision.followUpMinutes} minutes.`,
     "Output rules:",
     "- Send exactly one concise nudge with one immediate next action.",
     "- Prefer low-risk, evidence-backed micro-interventions (movement, breathing, focus sprint, social friction).",
+    "- When possible, include one concrete tool move (timer, blocker, DND, checklist) that immediately starts the action.",
     "- Do not mention internal scoring, models, or hidden policy.",
     "- If user appears highly distressed, prioritize supportive grounding and suggest reaching out to a trusted person.",
   ];
@@ -925,6 +1402,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
   const actionContract = resolveActionContract(lifeCoach);
 
   const state = await loadLifeCoachState(params.agentId, now);
+  applyPreferenceDecay(state, now);
   const messages = await loadTranscriptMessages(params.sessionEntry?.sessionFile);
   updatePendingOutcomes({
     state,
@@ -932,10 +1410,23 @@ export async function createLifeCoachHeartbeatPlan(params: {
     now,
     actionContract,
   });
+  learnPreferencesFromMessages({
+    state,
+    messages,
+  });
 
   const needs = estimateNeeds(messages);
-  const objectives = resolveObjectives(lifeCoach);
-  const tone = resolveTone(lifeCoach, needs);
+  const affect = estimateAffect(messages, needs);
+  const objectives = applyObjectivePreferenceBias({
+    objectives: resolveObjectives(lifeCoach),
+    preferences: state.preferences,
+  });
+  const tone = resolveTone({
+    cfg: lifeCoach,
+    needs,
+    affect,
+    preferences: state.preferences,
+  });
   const relapsePressure = computeRelapsePressure(state);
 
   const dueFollowUp = findDueFollowUp(state, now);
@@ -943,7 +1434,9 @@ export async function createLifeCoachHeartbeatPlan(params: {
     const followUpDecision = createFollowUpDecision({
       pending: dueFollowUp,
       needs,
+      affect,
       tone,
+      actionContract,
     });
     state.updatedAt = now;
     await saveLifeCoachState(params.agentId, state);
@@ -952,6 +1445,8 @@ export async function createLifeCoachHeartbeatPlan(params: {
         basePrompt: params.basePrompt,
         decision: followUpDecision,
         needs,
+        affect,
+        preferences: state.preferences,
         actionContract,
       }),
       decision: followUpDecision,
@@ -971,6 +1466,8 @@ export async function createLifeCoachHeartbeatPlan(params: {
       prompt: buildPrompt({
         basePrompt: params.basePrompt,
         needs,
+        affect,
+        preferences: state.preferences,
         blockedReason: `cooldown active for ${cooldownMinutes}m`,
         actionContract,
       }),
@@ -984,6 +1481,8 @@ export async function createLifeCoachHeartbeatPlan(params: {
       prompt: buildPrompt({
         basePrompt: params.basePrompt,
         needs,
+        affect,
+        preferences: state.preferences,
         blockedReason: `daily nudge cap reached (${maxNudgesPerDay})`,
         actionContract,
       }),
@@ -997,8 +1496,10 @@ export async function createLifeCoachHeartbeatPlan(params: {
   const decision = selectIntervention({
     activeInterventions,
     needs,
+    affect,
     objectives,
     state,
+    preferences: state.preferences,
     tone,
     relapsePressure,
     now,
@@ -1011,6 +1512,8 @@ export async function createLifeCoachHeartbeatPlan(params: {
       basePrompt: params.basePrompt,
       decision,
       needs,
+      affect,
+      preferences: state.preferences,
       blockedReason: decision ? undefined : "no intervention cleared score threshold",
       actionContract,
     }),
@@ -1050,6 +1553,7 @@ export async function recordLifeCoachDispatch(params: {
     sentAt: now,
     status: "sent",
     followUpMinutes: params.decision.followUpMinutes,
+    tone: params.decision.tone,
     note: params.decision.action,
   });
   state.history = state.history.slice(-200);
@@ -1059,7 +1563,9 @@ export async function recordLifeCoachDispatch(params: {
 
 export const __lifeCoachTestUtils = {
   estimateNeeds,
+  estimateAffect,
   resolveObjectives,
+  applyObjectivePreferenceBias,
   resolveActiveInterventions,
   selectIntervention,
   normalizeStateFile,

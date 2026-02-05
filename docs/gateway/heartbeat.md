@@ -222,9 +222,12 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop to heartbeat runs:
 
 - estimate current user state from recent session text signals
+- estimate affect (frustration, distress, momentum) to adapt tone and intervention friction
+- learn user preference affinities from outcomes and user language ("this helped", "don't suggest this")
 - pick a best-fit intervention from a weighted policy
 - send one clear, low-friction action
 - run timed follow-up check-ins
+- include intervention evidence notes and concrete execution hints (timer/blocker/DND/checklist)
 - update completion/ignore/reject outcomes (including explicit done/help tokens) to adapt future nudges
 - apply relapse-pressure adjustments when repeated social/focus nudges are ignored or rejected
 

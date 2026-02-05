@@ -158,6 +158,61 @@ describe("life-coach", () => {
     expect(state.stats[interventionId].completed).toBeGreaterThanOrEqual(1);
   });
 
+  it("learns intervention affinity from outcomes and explicit user preference text", async () => {
+    const sentAt = 300_000;
+    const initialPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: { enabled: true },
+      nowMs: sentAt,
+    });
+    expect(initialPlan.decision).toBeDefined();
+    if (!initialPlan.decision) {
+      return;
+    }
+
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: initialPlan.decision,
+      nowMs: sentAt,
+    });
+
+    const sessionFile = path.join(tmpDir, "session-preferences.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      buildSessionLine({
+        role: "user",
+        text: "done, this intervention helped and i prefer this kind of nudge",
+        timestamp: sentAt + 120_000,
+      }),
+      "utf-8",
+    );
+
+    await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: sentAt + 180_000,
+        sessionFile,
+      },
+      lifeCoach: { enabled: true, cooldownMinutes: 1 },
+      nowMs: sentAt + 180_000,
+    });
+
+    const statePath = path.join(tmpDir, "agents", "main", "life-coach-state.json");
+    const stateRaw = await fs.readFile(statePath, "utf-8");
+    const state = __lifeCoachTestUtils.normalizeStateFile(
+      JSON.parse(stateRaw) as unknown,
+      sentAt + 180_000,
+    );
+
+    expect(state.preferences.interventionAffinity[initialPlan.decision.intervention]).toBeGreaterThan(0);
+    expect(state.preferences.lastLearnedMessageTs).toBeGreaterThan(0);
+  });
+
   it("generates one due follow-up and records follow-up send on pending intervention", async () => {
     const initialNow = 1_000_000;
     const initialPlan = await createLifeCoachHeartbeatPlan({
@@ -215,6 +270,43 @@ describe("life-coach", () => {
     expect(state.history.length).toBe(1);
   });
 
+  it("uses supportive tone under high frustration and includes affect/evidence/tool guidance", async () => {
+    const sessionFile = path.join(tmpDir, "session-frustration.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionLine({
+          role: "user",
+          text: "this is frustrating and annoying, i feel overwhelmed and anxious",
+        }),
+        buildSessionLine({
+          role: "user",
+          text: "i cannot focus, i am exhausted and burned out",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: { enabled: true },
+    });
+
+    expect(plan.decision).toBeDefined();
+    expect(plan.decision?.tone).toBe("supportive");
+    expect(plan.decision?.affect.frustration).toBeGreaterThan(0.45);
+    expect(plan.prompt).toContain("Affect estimate (0..1)");
+    expect(plan.prompt).toContain("Evidence note:");
+    expect(plan.prompt).toContain("Tool execution hint:");
+  });
+
   it("includes configurable action-contract tokens in generated prompts", async () => {
     const sessionFile = path.join(tmpDir, "session-contract.jsonl");
     await fs.writeFile(
@@ -248,6 +340,68 @@ describe("life-coach", () => {
     expect(plan.decision).toBeDefined();
     expect(plan.prompt).toContain('Action contract: ask user to reply exactly "ALL_DONE"');
     expect(plan.prompt).toContain('"STUCK_HELP"');
+  });
+
+  it("uses custom action-contract tokens in follow-up phrasing", async () => {
+    const sessionFile = path.join(tmpDir, "session-followup-contract.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      buildSessionLine({
+        role: "user",
+        text: "i keep doomscrolling instagram and cannot focus",
+      }),
+      "utf-8",
+    );
+
+    const initialAt = 900_000;
+    const config = {
+      enabled: true,
+      cooldownMinutes: 180,
+      actionContract: { enabled: true, doneToken: "ALL_DONE", helpToken: "STUCK_HELP" },
+    } as const;
+
+    const initialPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: initialAt,
+        sessionFile,
+      },
+      lifeCoach: config,
+      nowMs: initialAt,
+    });
+    expect(initialPlan.decision).toBeDefined();
+    if (!initialPlan.decision) {
+      return;
+    }
+
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: initialPlan.decision,
+      nowMs: initialAt,
+    });
+
+    const followUpAt = initialAt + (initialPlan.decision.followUpMinutes + 1) * 60_000;
+    const followUpPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: followUpAt,
+        sessionFile,
+      },
+      lifeCoach: config,
+      nowMs: followUpAt,
+    });
+
+    expect(followUpPlan.decision?.phase).toBe("follow-up");
+    expect(followUpPlan.decision?.action).toContain("ALL_DONE");
+    if (followUpPlan.decision?.intervention === "social-block") {
+      expect(followUpPlan.decision.action).toContain("STUCK_HELP");
+    }
   });
 
   it("computes relapse pressure from ignored/rejected social outcomes", () => {
