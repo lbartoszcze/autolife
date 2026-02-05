@@ -76,6 +76,14 @@ export const HeartbeatSchema = z
           .union([z.literal("adaptive"), z.literal("supportive"), z.literal("direct")])
           .optional(),
         allowSoraVisualization: z.boolean().optional(),
+        actionContract: z
+          .object({
+            enabled: z.boolean().optional(),
+            doneToken: z.string().optional(),
+            helpToken: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

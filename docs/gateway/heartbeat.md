@@ -96,6 +96,11 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
           maxNudgesPerDay: 6,
           tone: "adaptive", // adaptive | supportive | direct
           allowSoraVisualization: true,
+          actionContract: {
+            enabled: true,
+            doneToken: "DONE",
+            helpToken: "NEED_HELP",
+          },
           objectives: {
             socialMediaReduction: 1.4,
             movement: 1.2,
@@ -205,6 +210,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - `maxNudgesPerDay`: daily cap for interventions.
   - `tone`: `adaptive`, `supportive`, or `direct`.
   - `allowSoraVisualization`: allow optional Sora-style visualization prompts in nudge planning.
+  - `actionContract`: require explicit completion tokens in nudge replies.
+    - `enabled`: toggle completion contract.
+    - `doneToken`: completion token (default `DONE`).
+    - `helpToken`: blocked token (default `NEED_HELP`).
   - `objectives`: weighted priorities for `mood`, `energy`, `focus`, `movement`, `socialMediaReduction`, `stressRegulation`.
   - `interventions.allow` / `interventions.deny`: filter intervention types (`walk`, `social-block`, `focus-sprint`, `breathing`, `hydration`, `sora-visualization`).
 

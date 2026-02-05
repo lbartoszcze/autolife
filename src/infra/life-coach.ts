@@ -81,6 +81,8 @@ export type LifeCoachHeartbeatPlan = {
 const DEFAULT_COOLDOWN_MINUTES = 90;
 const DEFAULT_MAX_NUDGES_PER_DAY = 6;
 const DEFAULT_ALLOW_SORA = true;
+const DEFAULT_DONE_TOKEN = "DONE";
+const DEFAULT_HELP_TOKEN = "NEED_HELP";
 
 const DEFAULT_OBJECTIVES: Record<LifeCoachObjective, number> = {
   mood: 1,
@@ -554,6 +556,17 @@ function resolveObjectives(cfg?: HeartbeatLifeCoachConfig): Record<LifeCoachObje
   return merged;
 }
 
+function resolveActionContract(cfg?: HeartbeatLifeCoachConfig): {
+  enabled: boolean;
+  doneToken: string;
+  helpToken: string;
+} {
+  const enabled = cfg?.actionContract?.enabled ?? true;
+  const doneToken = cfg?.actionContract?.doneToken?.trim() || DEFAULT_DONE_TOKEN;
+  const helpToken = cfg?.actionContract?.helpToken?.trim() || DEFAULT_HELP_TOKEN;
+  return { enabled, doneToken, helpToken };
+}
+
 function resolveTone(cfg: HeartbeatLifeCoachConfig | undefined, needs: LifeCoachNeedScores): ResolvedTone {
   if (cfg?.tone === "supportive") {
     return "supportive";
@@ -805,6 +818,11 @@ function buildPrompt(params: {
   decision?: LifeCoachDecision;
   needs: LifeCoachNeedScores;
   blockedReason?: string;
+  actionContract: {
+    enabled: boolean;
+    doneToken: string;
+    helpToken: string;
+  };
 }): string {
   const needsLine = `State estimate (0..1 need severity): mood=${params.needs.mood}, energy=${params.needs.energy}, focus=${params.needs.focus}, movement=${params.needs.movement}, socialMediaReduction=${params.needs.socialMediaReduction}, stressRegulation=${params.needs.stressRegulation}.`;
   if (!params.decision) {
@@ -835,6 +853,11 @@ function buildPrompt(params: {
     "- Do not mention internal scoring, models, or hidden policy.",
     "- If user appears highly distressed, prioritize supportive grounding and suggest reaching out to a trusted person.",
   ];
+  if (params.actionContract.enabled) {
+    lines.push(
+      `Action contract: ask user to reply exactly "${params.actionContract.doneToken}" when completed or "${params.actionContract.helpToken}" if blocked.`,
+    );
+  }
   if (params.decision.soraPrompt) {
     lines.push(
       `Optional Sora visualization prompt (use only if relevant): ${params.decision.soraPrompt}`,
@@ -863,6 +886,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
 
   const needs = estimateNeeds(messages);
   const objectives = resolveObjectives(lifeCoach);
+  const actionContract = resolveActionContract(lifeCoach);
   const tone = resolveTone(lifeCoach, needs);
 
   const dueFollowUp = findDueFollowUp(state, now);
@@ -879,6 +903,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
         basePrompt: params.basePrompt,
         decision: followUpDecision,
         needs,
+        actionContract,
       }),
       decision: followUpDecision,
     };
@@ -898,6 +923,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
         basePrompt: params.basePrompt,
         needs,
         blockedReason: `cooldown active for ${cooldownMinutes}m`,
+        actionContract,
       }),
     };
   }
@@ -910,6 +936,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
         basePrompt: params.basePrompt,
         needs,
         blockedReason: `daily nudge cap reached (${maxNudgesPerDay})`,
+        actionContract,
       }),
     };
   }
@@ -935,6 +962,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
       decision,
       needs,
       blockedReason: decision ? undefined : "no intervention cleared score threshold",
+      actionContract,
     }),
     decision,
   };

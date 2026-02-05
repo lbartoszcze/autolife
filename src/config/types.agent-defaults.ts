@@ -55,6 +55,12 @@ export type HeartbeatLifeCoachConfig = {
   tone?: "adaptive" | "supportive" | "direct";
   /** Prefer generating Sora visualization prompts when helpful (default: true). */
   allowSoraVisualization?: boolean;
+  /** Completion contract for nudges (default: enabled; DONE / NEED_HELP). */
+  actionContract?: {
+    enabled?: boolean;
+    doneToken?: string;
+    helpToken?: string;
+  };
 };
 
 export type AgentModelListConfig = {

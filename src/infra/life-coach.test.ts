@@ -214,4 +214,39 @@ describe("life-coach", () => {
     expect(typeof pending?.followUpSentAt).toBe("number");
     expect(state.history.length).toBe(1);
   });
+
+  it("includes configurable action-contract tokens in generated prompts", async () => {
+    const sessionFile = path.join(tmpDir, "session-contract.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      buildSessionLine({
+        role: "user",
+        text: "i am distracted by social media and cannot focus",
+      }),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: {
+        enabled: true,
+        actionContract: {
+          enabled: true,
+          doneToken: "ALL_DONE",
+          helpToken: "STUCK_HELP",
+        },
+      },
+    });
+
+    expect(plan.decision).toBeDefined();
+    expect(plan.prompt).toContain('Action contract: ask user to reply exactly "ALL_DONE"');
+    expect(plan.prompt).toContain('"STUCK_HELP"');
+  });
 });
