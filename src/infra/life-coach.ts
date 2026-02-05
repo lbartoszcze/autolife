@@ -1,15 +1,58 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import { resolveStateDir } from "../config/paths.js";
-import type {
-  HeartbeatLifeCoachConfig,
-  LifeCoachInterventionId,
-} from "../config/types.agent-defaults.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+
+export type LifeCoachObjective = string;
+
+export type LifeCoachInterventionId = string;
+
+export type HeartbeatLifeCoachConfig = {
+  enabled?: boolean;
+  objectives?: Partial<Record<LifeCoachObjective, number>>;
+  interventions?: {
+    allow?: LifeCoachInterventionId[];
+    deny?: LifeCoachInterventionId[];
+  };
+  cooldownMinutes?: number;
+  maxNudgesPerDay?: number;
+  tone?: "adaptive" | "supportive" | "direct";
+  allowSoraVisualization?: boolean;
+  actionContract?: {
+    enabled?: boolean;
+    doneToken?: string;
+    helpToken?: string;
+  };
+  science?: {
+    enabled?: boolean;
+    mode?: "dynamic" | "catalog" | "hybrid";
+    catalogFile?: string;
+    minConfidence?: number;
+    maxPapers?: number;
+    fetchTimeoutMs?: number;
+    cacheHours?: number;
+  };
+};
+
+type AgentConfigEntry = {
+  id?: string;
+  default?: boolean;
+  workspace?: string;
+};
+
+export type LifeCoachConfig = {
+  agents?: {
+    defaults?: {
+      workspace?: string;
+    };
+    list?: AgentConfigEntry[];
+  };
+};
+
+export type SessionEntry = {
+  sessionId?: string;
+  updatedAt?: number;
+  sessionFile?: string;
+};
 
 type TranscriptRole = "user" | "assistant";
 
@@ -26,6 +69,90 @@ type LifeCoachAffectScores = {
   distress: number;
   momentum: number;
 };
+
+const DEFAULT_AGENT_ID = "main";
+const STATE_DIR_NAME = ".autlife";
+const DEFAULT_WORKSPACE_DIR = path.join(os.homedir(), STATE_DIR_NAME, "workspace");
+const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
+const LEADING_DASH_RE = /^-+/;
+const TRAILING_DASH_RE = /-+$/;
+
+function resolveUserPath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("~")) {
+    const expanded = trimmed.replace(/^~(?=$|[\\/])/, os.homedir());
+    return path.resolve(expanded);
+  }
+  return path.resolve(trimmed);
+}
+
+function resolveStateDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  const override = env.AUTLIFE_STATE_DIR?.trim();
+  if (override) {
+    return resolveUserPath(override);
+  }
+  return path.join(homedir(), STATE_DIR_NAME);
+}
+
+function normalizeAgentId(value: string | undefined | null): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return DEFAULT_AGENT_ID;
+  }
+  if (VALID_ID_RE.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
+  return (
+    trimmed
+      .toLowerCase()
+      .replace(INVALID_CHARS_RE, "-")
+      .replace(LEADING_DASH_RE, "")
+      .replace(TRAILING_DASH_RE, "")
+      .slice(0, 64) || DEFAULT_AGENT_ID
+  );
+}
+
+function resolveDefaultAgentId(cfg: LifeCoachConfig): string {
+  const agents = Array.isArray(cfg.agents?.list)
+    ? cfg.agents.list.filter((entry): entry is AgentConfigEntry => Boolean(entry && typeof entry === "object"))
+    : [];
+  if (agents.length === 0) {
+    return DEFAULT_AGENT_ID;
+  }
+  const defaults = agents.filter((entry) => entry.default === true);
+  const selected = defaults[0] ?? agents[0];
+  return normalizeAgentId(selected?.id);
+}
+
+function resolveAgentWorkspaceDir(cfg: LifeCoachConfig, agentId: string): string {
+  const id = normalizeAgentId(agentId);
+  const agents = Array.isArray(cfg.agents?.list)
+    ? cfg.agents.list.filter((entry): entry is AgentConfigEntry => Boolean(entry && typeof entry === "object"))
+    : [];
+  const configuredAgentWorkspace = agents
+    .find((entry) => normalizeAgentId(entry.id) === id)
+    ?.workspace?.trim();
+  if (configuredAgentWorkspace) {
+    return resolveUserPath(configuredAgentWorkspace);
+  }
+
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  if (id === defaultAgentId) {
+    const fallbackWorkspace = cfg.agents?.defaults?.workspace?.trim();
+    if (fallbackWorkspace) {
+      return resolveUserPath(fallbackWorkspace);
+    }
+    return DEFAULT_WORKSPACE_DIR;
+  }
+  return path.join(os.homedir(), STATE_DIR_NAME, `workspace-${id}`);
+}
 
 type ScienceReference = {
   title: string;
@@ -546,7 +673,7 @@ function resolveScienceRuntime(lifeCoach?: HeartbeatLifeCoachConfig): {
 }
 
 async function loadScienceTopics(params: {
-  cfg: OpenClawConfig;
+  cfg: LifeCoachConfig;
   agentId: string;
   lifeCoach?: HeartbeatLifeCoachConfig;
 }): Promise<ScienceTopicSpec[]> {
@@ -2221,7 +2348,7 @@ function computeRelapsePressure(state: LifeCoachStateFile): number {
 }
 
 export async function createLifeCoachHeartbeatPlan(params: {
-  cfg: OpenClawConfig;
+  cfg: LifeCoachConfig;
   agentId: string;
   basePrompt: string;
   sessionEntry?: SessionEntry;

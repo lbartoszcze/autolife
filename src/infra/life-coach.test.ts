@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { __lifeCoachTestUtils, createLifeCoachHeartbeatPlan, recordLifeCoachDispatch } from "./life-coach.js";
+import type { LifeCoachConfig } from "./life-coach.js";
 
-const BASE_CFG = {} as OpenClawConfig;
+const BASE_CFG = {} as LifeCoachConfig;
 
 function buildSessionLine(params: { role: "user" | "assistant"; text: string; timestamp?: number }) {
   return JSON.stringify({
@@ -58,18 +58,18 @@ describe("life-coach", () => {
   let prevStateDir: string | undefined;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-life-coach-"));
-    prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "autlife-life-coach-"));
+    prevStateDir = process.env.AUTLIFE_STATE_DIR;
+    process.env.AUTLIFE_STATE_DIR = tmpDir;
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     if (prevStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.AUTLIFE_STATE_DIR;
     } else {
-      process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      process.env.AUTLIFE_STATE_DIR = prevStateDir;
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
@@ -136,7 +136,7 @@ describe("life-coach", () => {
             workspace: tmpDir,
           },
         },
-      } as OpenClawConfig,
+      } as LifeCoachConfig,
       agentId: "main",
       basePrompt: "Base prompt",
       sessionEntry: {
@@ -179,7 +179,7 @@ describe("life-coach", () => {
             workspace: tmpDir,
           },
         },
-      } as OpenClawConfig,
+      } as LifeCoachConfig,
       agentId: "main",
       basePrompt: "Base prompt",
       sessionEntry: {
@@ -245,7 +245,7 @@ describe("life-coach", () => {
             workspace: tmpDir,
           },
         },
-      } as OpenClawConfig,
+      } as LifeCoachConfig,
       agentId: "main",
       basePrompt: "Base prompt",
       sessionEntry: {
@@ -318,7 +318,7 @@ describe("life-coach", () => {
             workspace: tmpDir,
           },
         },
-      } as OpenClawConfig,
+      } as LifeCoachConfig,
       agentId: "main",
       basePrompt: "Base prompt",
       sessionEntry: {
@@ -879,7 +879,7 @@ describe("life-coach", () => {
             workspace: tmpDir,
           },
         },
-      } as OpenClawConfig,
+      } as LifeCoachConfig,
       agentId: "main",
       basePrompt: "Base prompt",
       sessionEntry: {
