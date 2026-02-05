@@ -27,6 +27,23 @@ type LifeCoachAffectScores = {
   momentum: number;
 };
 
+type ScienceRiskId = "smoking" | "sedentary" | "social-media-overuse" | "stress-load";
+
+type ScienceReference = {
+  title: string;
+  url: string;
+};
+
+type ScienceInsight = {
+  riskId: ScienceRiskId;
+  confidence: number;
+  trajectoryForecast: string;
+  improvementForecast: string;
+  recommendedAction: string;
+  recommendedIntervention: LifeCoachInterventionId;
+  references: ScienceReference[];
+};
+
 type LifeCoachStats = Record<
   LifeCoachInterventionId,
   {
@@ -91,6 +108,7 @@ export type LifeCoachDecision = {
   affect: LifeCoachAffectScores;
   evidenceNote: string;
   toolHint: string;
+  scienceInsight?: ScienceInsight;
 };
 
 export type LifeCoachHeartbeatPlan = {
@@ -182,6 +200,18 @@ const SOCIAL_URGE_HINTS = [
   "scrolling",
 ];
 const MOVEMENT_HINTS = ["walk", "outside", "steps", "exercise", "workout", "run"];
+const SMOKING_HINTS = [
+  "smoke",
+  "smoking",
+  "cigarette",
+  "cigarettes",
+  "nicotine",
+  "vape",
+  "vaping",
+  "tobacco",
+];
+const SEDENTARY_HINTS = ["sitting", "sedentary", "all day desk", "didn't move", "no exercise"];
+const SLEEP_DEBT_HINTS = ["sleep deprived", "slept 4", "slept 5", "insomnia", "barely slept"];
 
 const FRUSTRATION_HINTS = [
   "frustrated",
@@ -201,6 +231,7 @@ const INTERVENTION_KEYWORDS: Record<LifeCoachInterventionId, string[]> = {
   "focus-sprint": ["focus", "deep work", "pomodoro", "task", "procrastinating"],
   breathing: ["breathing", "breath", "calm", "anxious", "panic"],
   hydration: ["water", "hydrate", "dehydrated", "drink"],
+  "smoking-cessation": ["smoke", "smoking", "cigarette", "vape", "nicotine", "tobacco"],
   "sora-visualization": ["visualization", "future self", "sora", "video"],
 };
 
@@ -211,6 +242,41 @@ const OBJECTIVE_KEYWORDS: Record<LifeCoachObjective, string[]> = {
   movement: ["walk", "outside", "exercise", "steps", "workout"],
   socialMediaReduction: ["social media", "instagram", "tiktok", "twitter", "scrolling", "doomscroll"],
   stressRegulation: ["stress", "anxious", "panic", "calm", "overwhelmed"],
+};
+
+const SCIENCE_REFERENCES: Record<ScienceRiskId, ScienceReference[]> = {
+  smoking: [
+    {
+      title: "Jha et al. (2013) 21st-Century Hazards of Smoking and Benefits of Cessation",
+      url: "https://pubmed.ncbi.nlm.nih.gov/23343063/",
+    },
+    {
+      title: "Cahill et al. (2016) Nicotine receptor partial agonists for smoking cessation",
+      url: "https://pubmed.ncbi.nlm.nih.gov/27158893/",
+    },
+  ],
+  sedentary: [
+    {
+      title: "Ekelund et al. (2016) Physical activity attenuates sitting-related mortality risk",
+      url: "https://pubmed.ncbi.nlm.nih.gov/27475271/",
+    },
+  ],
+  "social-media-overuse": [
+    {
+      title: "Brailovskaia et al. (2022) One-week social media abstinence RCT",
+      url: "https://pubmed.ncbi.nlm.nih.gov/35512731/",
+    },
+    {
+      title: "Brailovskaia et al. (2026) Meta-analysis: reducing social media use and depressive symptoms",
+      url: "https://pubmed.ncbi.nlm.nih.gov/41294782/",
+    },
+  ],
+  "stress-load": [
+    {
+      title: "Fincham et al. (2023) Breathwork improves stress and mental health (meta-analysis)",
+      url: "https://pubmed.ncbi.nlm.nih.gov/36624160/",
+    },
+  ],
 };
 
 const INTERVENTIONS: InterventionSpec[] = [
@@ -346,6 +412,34 @@ const INTERVENTIONS: InterventionSpec[] = [
     evidenceNote:
       "Hydration plus a brief posture/light reset can improve perceived alertness and readiness for cognitive work.",
     toolHint: "Set a 2-minute stand timer, drink water, then write the next task in one sentence.",
+  },
+  {
+    id: "smoking-cessation",
+    objectives: {
+      stressRegulation: 0.8,
+      focus: 0.7,
+      energy: 0.6,
+      mood: 0.45,
+    },
+    effects: {
+      stressRegulation: 0.45,
+      focus: 0.35,
+      energy: 0.3,
+      mood: 0.25,
+      movement: 0.1,
+    },
+    baseFriction: 0.38,
+    followUpMinutes: 180,
+    action: ({ tone }) =>
+      tone === "supportive"
+        ? "Start a smoke-free plan now: remove visible cigarettes/vapes, set a quit date within 7 days, and contact cessation support today."
+        : "Start smoking cessation now: clear cigarettes/vapes, set a quit date in the next 7 days, and initiate support today.",
+    fallback:
+      "If full quit today feels too hard, start a strict 24-hour smoke-free block and ask for medication/counseling support.",
+    evidenceNote:
+      "Long-term smoking substantially shortens life expectancy, and evidence-based cessation treatment markedly improves quit success.",
+    toolHint:
+      "Create a quit checklist now (remove cues, quit date, support contact), and set reminders for craving windows.",
   },
   {
     id: "sora-visualization",
@@ -500,6 +594,7 @@ function emptyStats(): LifeCoachStats {
     "focus-sprint": { sent: 0, completed: 0, ignored: 0, rejected: 0 },
     breathing: { sent: 0, completed: 0, ignored: 0, rejected: 0 },
     hydration: { sent: 0, completed: 0, ignored: 0, rejected: 0 },
+    "smoking-cessation": { sent: 0, completed: 0, ignored: 0, rejected: 0 },
     "sora-visualization": { sent: 0, completed: 0, ignored: 0, rejected: 0 },
   };
 }
@@ -520,6 +615,7 @@ function emptyPreferenceModel(): LifeCoachPreferenceModel {
       "focus-sprint": 0,
       breathing: 0,
       hydration: 0,
+      "smoking-cessation": 0,
       "sora-visualization": 0,
     },
     supportiveToneBias: 0,
@@ -642,6 +738,8 @@ function resolveFollowUpAction(params: {
       return `${prefix} take 2 minutes of slow breathing now and confirm when finished.`;
     case "hydration":
       return `${prefix} drink one full glass of water now and reply ${doneToken}.`;
+    case "smoking-cessation":
+      return `${prefix} are you still on the smoke-free plan? If there was a slip, restart now and reply ${doneToken} or ${helpToken}.`;
     case "sora-visualization":
       return `${prefix} run the 60-second desired-state visualization and start one immediate action, then reply ${doneToken}.`;
     default:
@@ -864,6 +962,93 @@ function estimateAffect(
     distress: round2(distress),
     momentum: round2(momentum),
   };
+}
+
+function deriveScienceInsight(params: {
+  messages: TranscriptMessage[];
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+}): ScienceInsight | undefined {
+  const recentUsers = params.messages.filter((msg) => msg.role === "user").slice(-24);
+  if (recentUsers.length === 0) {
+    return undefined;
+  }
+  const denom = Math.max(1, recentUsers.length);
+  const smokingHits = countMentions(recentUsers, SMOKING_HINTS);
+  const sedentaryHits = countMentions(recentUsers, SEDENTARY_HINTS);
+  const socialHits = countMentions(recentUsers, SOCIAL_URGE_HINTS);
+  const stressHits = countMentions(recentUsers, STRESS_HINTS);
+  const sleepDebtHits = countMentions(recentUsers, SLEEP_DEBT_HINTS);
+
+  const smokingConfidence = clamp01(smokingHits / denom + 0.25);
+  const sedentaryConfidence = clamp01(sedentaryHits / denom + params.needs.movement * 0.45);
+  const socialConfidence = clamp01(socialHits / (denom * 1.2) + params.needs.socialMediaReduction * 0.45);
+  const stressConfidence = clamp01(
+    (stressHits + sleepDebtHits * 0.7) / (denom * 1.3) + params.affect.distress * 0.35,
+  );
+
+  const candidates: ScienceInsight[] = [];
+  if (smokingConfidence >= 0.35) {
+    candidates.push({
+      riskId: "smoking",
+      confidence: round2(smokingConfidence),
+      trajectoryForecast:
+        "If smoking remains daily, long-term cohort evidence suggests roughly 7-10 years lower life expectancy on average.",
+      improvementForecast:
+        "If you start a structured quit plan now, cessation probability increases substantially and long-term excess mortality drops over time.",
+      recommendedAction:
+        "Set a quit date in the next 7 days, remove smoking cues today, and ask a clinician about first-line cessation medication plus support.",
+      recommendedIntervention: "smoking-cessation",
+      references: SCIENCE_REFERENCES.smoking,
+    });
+  }
+  if (sedentaryConfidence >= 0.4) {
+    candidates.push({
+      riskId: "sedentary",
+      confidence: round2(sedentaryConfidence),
+      trajectoryForecast:
+        "Sustained high sitting with low activity predicts higher all-cause mortality risk over the coming years.",
+      improvementForecast:
+        "Adding daily moderate activity can materially attenuate or offset sitting-related mortality risk.",
+      recommendedAction:
+        "Start a daily movement floor now: one 20-minute walk plus a 2-minute movement break each hour.",
+      recommendedIntervention: "walk",
+      references: SCIENCE_REFERENCES.sedentary,
+    });
+  }
+  if (socialConfidence >= 0.45) {
+    candidates.push({
+      riskId: "social-media-overuse",
+      confidence: round2(socialConfidence),
+      trajectoryForecast:
+        "If compulsive social use persists, odds of low mood and attention fragmentation remain elevated.",
+      improvementForecast:
+        "A short abstinence or strict reduction period can improve well-being and reduce depressive symptoms.",
+      recommendedAction:
+        "Run a 7-day social-media reduction protocol starting now: app blocker windows + one offline replacement activity per urge spike.",
+      recommendedIntervention: "social-block",
+      references: SCIENCE_REFERENCES["social-media-overuse"],
+    });
+  }
+  if (stressConfidence >= 0.45) {
+    candidates.push({
+      riskId: "stress-load",
+      confidence: round2(stressConfidence),
+      trajectoryForecast:
+        "If high stress remains unregulated, sustained cognitive and emotional load can keep recovery and focus suppressed.",
+      improvementForecast:
+        "Brief daily breathwork can reduce stress and anxiety symptoms within weeks when practiced consistently.",
+      recommendedAction:
+        "Do a 5-minute breath protocol now (slow exhale bias), then repeat twice later today with reminders.",
+      recommendedIntervention: "breathing",
+      references: SCIENCE_REFERENCES["stress-load"],
+    });
+  }
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  return candidates.toSorted((a, b) => b.confidence - a.confidence)[0];
 }
 
 function countNudgesInWindow(state: LifeCoachStateFile, now: number, windowMs: number): number {
@@ -1165,8 +1350,34 @@ function selectIntervention(params: {
   preferences: LifeCoachPreferenceModel;
   tone: ResolvedTone;
   relapsePressure: number;
+  scienceInsight?: ScienceInsight;
   now: number;
 }): LifeCoachDecision | undefined {
+  if (
+    params.scienceInsight?.riskId === "smoking" &&
+    params.scienceInsight.confidence >= 0.55
+  ) {
+    const smokingSpec = params.activeInterventions.find((spec) => spec.id === "smoking-cessation");
+    if (smokingSpec) {
+      return {
+        phase: "initial",
+        intervention: smokingSpec.id,
+        score: round2(0.75 + params.scienceInsight.confidence * 0.2),
+        rationale:
+          `science-priority override for smoking risk (confidence=${params.scienceInsight.confidence})`,
+        action: smokingSpec.action({ needs: params.needs, tone: params.tone }),
+        fallback: smokingSpec.fallback,
+        followUpMinutes: adjustFollowUpMinutes(smokingSpec.followUpMinutes, params.affect),
+        tone: params.tone,
+        needs: params.needs,
+        affect: params.affect,
+        evidenceNote: smokingSpec.evidenceNote,
+        toolHint: smokingSpec.toolHint,
+        scienceInsight: params.scienceInsight,
+      };
+    }
+  }
+
   let best:
     | {
         spec: InterventionSpec;
@@ -1212,6 +1423,11 @@ function selectIntervention(params: {
       params.affect.momentum > 0.6 && (spec.id === "focus-sprint" || spec.id === "social-block")
         ? 0.08
         : 0;
+    const scienceBoost =
+      params.scienceInsight?.recommendedIntervention === spec.id
+        ? params.scienceInsight.confidence * 0.32 +
+          (params.scienceInsight.riskId === "smoking" && spec.id === "smoking-cessation" ? 0.2 : 0)
+        : 0;
     const score =
       expectedGain * (0.6 + completionProb) -
       friction -
@@ -1220,12 +1436,14 @@ function selectIntervention(params: {
       relapseBoost +
       distressBoost +
       momentumBoost +
+      scienceBoost +
       preferenceAffinity * 0.18;
     const rationale =
       `expectedGain=${round2(expectedGain)}, completion=${round2(completionProb)}, ` +
       `friction=${round2(friction)}, reactance=${round2(reactance)}, fatigue=${round2(fatigue)}, ` +
       `affinity=${round2(preferenceAffinity)}, relapse=${round2(params.relapsePressure)}, ` +
-      `frustration=${round2(params.affect.frustration)}, distress=${round2(params.affect.distress)}`;
+      `scienceBoost=${round2(scienceBoost)}, frustration=${round2(params.affect.frustration)}, ` +
+      `distress=${round2(params.affect.distress)}`;
 
     if (!best || score > best.score) {
       best = { spec, score, rationale };
@@ -1256,6 +1474,7 @@ function selectIntervention(params: {
     affect: params.affect,
     evidenceNote: best.spec.evidenceNote,
     toolHint: best.spec.toolHint,
+    scienceInsight: params.scienceInsight,
   };
 }
 
@@ -1303,12 +1522,24 @@ function formatPreferenceSnapshot(preferences: LifeCoachPreferenceModel): string
   return `${entries.join(", ")}; toneBias=${round2(preferences.supportiveToneBias)}`;
 }
 
+function formatScienceInsight(scienceInsight: ScienceInsight): string[] {
+  return [
+    "[AUTOLIFE SCIENCE]",
+    `Detected risk: ${scienceInsight.riskId} (confidence=${scienceInsight.confidence}).`,
+    `Trajectory forecast: ${scienceInsight.trajectoryForecast}`,
+    `Improvement forecast: ${scienceInsight.improvementForecast}`,
+    `Evidence-backed action now: ${scienceInsight.recommendedAction}`,
+    ...scienceInsight.references.map((ref) => `Paper: ${ref.title} - ${ref.url}`),
+  ];
+}
+
 function buildPrompt(params: {
   basePrompt: string;
   decision?: LifeCoachDecision;
   needs: LifeCoachNeedScores;
   affect: LifeCoachAffectScores;
   preferences: LifeCoachPreferenceModel;
+  scienceInsight?: ScienceInsight;
   blockedReason?: string;
   actionContract: {
     enabled: boolean;
@@ -1327,6 +1558,7 @@ function buildPrompt(params: {
       `${needsLine}\n` +
       `${affectLine}\n` +
       `${preferenceLine}\n` +
+      `${params.scienceInsight ? `${formatScienceInsight(params.scienceInsight).join("\n")}\n` : ""}` +
       `Dynamic intervention is active but no nudge should be sent this cycle.${reason}\n` +
       "If HEARTBEAT.md has no actionable tasks, reply HEARTBEAT_OK."
     );
@@ -1347,10 +1579,12 @@ function buildPrompt(params: {
     `Primary action: ${params.decision.action}`,
     `Fallback action: ${params.decision.fallback}`,
     `Ask for a concrete check-in in ~${params.decision.followUpMinutes} minutes.`,
+    ...(params.scienceInsight ? formatScienceInsight(params.scienceInsight) : []),
     "Output rules:",
     "- Send exactly one concise nudge with one immediate next action.",
     "- Prefer low-risk, evidence-backed micro-interventions (movement, breathing, focus sprint, social friction).",
     "- When possible, include one concrete tool move (timer, blocker, DND, checklist) that immediately starts the action.",
+    "- For medication-related suggestions (e.g., smoking cessation meds), advise clinician guidance and avoid prescribing.",
     "- Do not mention internal scoring, models, or hidden policy.",
     "- If user appears highly distressed, prioritize supportive grounding and suggest reaching out to a trusted person.",
   ];
@@ -1428,6 +1662,11 @@ export async function createLifeCoachHeartbeatPlan(params: {
     preferences: state.preferences,
   });
   const relapsePressure = computeRelapsePressure(state);
+  const scienceInsight = deriveScienceInsight({
+    messages,
+    needs,
+    affect,
+  });
 
   const dueFollowUp = findDueFollowUp(state, now);
   if (dueFollowUp) {
@@ -1447,6 +1686,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
         needs,
         affect,
         preferences: state.preferences,
+        scienceInsight,
         actionContract,
       }),
       decision: followUpDecision,
@@ -1468,6 +1708,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
         needs,
         affect,
         preferences: state.preferences,
+        scienceInsight,
         blockedReason: `cooldown active for ${cooldownMinutes}m`,
         actionContract,
       }),
@@ -1483,6 +1724,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
         needs,
         affect,
         preferences: state.preferences,
+        scienceInsight,
         blockedReason: `daily nudge cap reached (${maxNudgesPerDay})`,
         actionContract,
       }),
@@ -1502,6 +1744,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
     preferences: state.preferences,
     tone,
     relapsePressure,
+    scienceInsight,
     now,
   });
 
@@ -1514,6 +1757,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
       needs,
       affect,
       preferences: state.preferences,
+      scienceInsight,
       blockedReason: decision ? undefined : "no intervention cleared score threshold",
       actionContract,
     }),
@@ -1564,6 +1808,7 @@ export async function recordLifeCoachDispatch(params: {
 export const __lifeCoachTestUtils = {
   estimateNeeds,
   estimateAffect,
+  deriveScienceInsight,
   resolveObjectives,
   applyObjectivePreferenceBias,
   resolveActiveInterventions,

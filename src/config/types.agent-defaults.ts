@@ -32,6 +32,7 @@ export type LifeCoachInterventionId =
   | "focus-sprint"
   | "breathing"
   | "hydration"
+  | "smoking-cessation"
   | "sora-visualization";
 
 export type HeartbeatLifeCoachConfig = {

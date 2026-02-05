@@ -215,7 +215,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `doneToken`: completion token (default `DONE`).
     - `helpToken`: blocked token (default `NEED_HELP`).
   - `objectives`: weighted priorities for `mood`, `energy`, `focus`, `movement`, `socialMediaReduction`, `stressRegulation`.
-  - `interventions.allow` / `interventions.deny`: filter intervention types (`walk`, `social-block`, `focus-sprint`, `breathing`, `hydration`, `sora-visualization`).
+  - `interventions.allow` / `interventions.deny`: filter intervention types (`walk`, `social-block`, `focus-sprint`, `breathing`, `hydration`, `smoking-cessation`, `sora-visualization`).
 
 ## Life Coach Mode
 
@@ -225,6 +225,7 @@ With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop 
 - estimate affect (frustration, distress, momentum) to adapt tone and intervention friction
 - learn user preference affinities from outcomes and user language ("this helped", "don't suggest this")
 - pick a best-fit intervention from a weighted policy
+- inject science-backed risk forecasts and paper links when relevant (for example, smoking or sedentary risk)
 - send one clear, low-friction action
 - run timed follow-up check-ins
 - include intervention evidence notes and concrete execution hints (timer/blocker/DND/checklist)

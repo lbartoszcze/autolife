@@ -74,6 +74,76 @@ describe("life-coach", () => {
     expect(plan.decision?.needs.focus).toBeGreaterThan(0.45);
   });
 
+  it("injects science forecast and paper links for smoking risk", async () => {
+    const sessionFile = path.join(tmpDir, "session-smoking-science.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionLine({
+          role: "user",
+          text: "I keep smoking cigarettes every day and want to quit but i keep relapsing",
+        }),
+        buildSessionLine({
+          role: "user",
+          text: "nicotine cravings are strong and this is stressing me out",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: { enabled: true },
+    });
+
+    expect(plan.prompt).toContain("[AUTOLIFE SCIENCE]");
+    expect(plan.prompt).toContain("Detected risk: smoking");
+    expect(plan.prompt).toContain("7-10 years lower life expectancy");
+    expect(plan.prompt).toContain("https://pubmed.ncbi.nlm.nih.gov/23343063/");
+    expect(plan.prompt).toContain("https://pubmed.ncbi.nlm.nih.gov/27158893/");
+  });
+
+  it("prioritizes smoking-cessation intervention when smoking risk confidence is high", async () => {
+    const sessionFile = path.join(tmpDir, "session-smoking-priority.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionLine({
+          role: "user",
+          text: "I smoke every day, I need to quit smoking now, cigarettes are hurting me",
+        }),
+        buildSessionLine({
+          role: "user",
+          text: "I vape and smoke, nicotine cravings are constant, please help me stop",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: { enabled: true },
+    });
+
+    expect(plan.decision).toBeDefined();
+    expect(plan.decision?.intervention).toBe("smoking-cessation");
+    expect(plan.decision?.scienceInsight?.riskId).toBe("smoking");
+  });
+
   it("respects cooldown between nudges", async () => {
     const nowMs = 100_000;
     const planA = await createLifeCoachHeartbeatPlan({

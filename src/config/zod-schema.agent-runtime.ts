@@ -51,6 +51,7 @@ export const HeartbeatSchema = z
                   z.literal("focus-sprint"),
                   z.literal("breathing"),
                   z.literal("hydration"),
+                  z.literal("smoking-cessation"),
                   z.literal("sora-visualization"),
                 ]),
               )
@@ -63,6 +64,7 @@ export const HeartbeatSchema = z
                   z.literal("focus-sprint"),
                   z.literal("breathing"),
                   z.literal("hydration"),
+                  z.literal("smoking-cessation"),
                   z.literal("sora-visualization"),
                 ]),
               )
