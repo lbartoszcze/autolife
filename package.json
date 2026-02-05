@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run src/infra/life-coach.test.ts",
+    "test": "vitest run",
     "test:watch": "vitest",
     "run:intervention": "node --import tsx scripts/run-intervention.ts"
   },
