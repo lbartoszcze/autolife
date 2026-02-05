@@ -61,15 +61,14 @@ type ScienceInsight = {
 
 type ScienceMode = "dynamic" | "catalog" | "hybrid";
 
-type LifeCoachStats = Record<
-  LifeCoachInterventionId,
-  {
-    sent: number;
-    completed: number;
-    ignored: number;
-    rejected: number;
-  }
->;
+type LifeCoachInterventionStat = {
+  sent: number;
+  completed: number;
+  ignored: number;
+  rejected: number;
+};
+
+type LifeCoachStats = Record<string, LifeCoachInterventionStat>;
 
 type LifeCoachHistoryEntry = {
   id: string;
@@ -84,10 +83,17 @@ type LifeCoachHistoryEntry = {
 
 type LifeCoachPreferenceModel = {
   objectiveBias: Record<LifeCoachObjective, number>;
-  interventionAffinity: Record<LifeCoachInterventionId, number>;
+  interventionAffinity: Record<string, number>;
   supportiveToneBias: number;
   lastLearnedMessageTs: number;
 };
+
+type InterventionStrategy =
+  | "activation"
+  | "friction"
+  | "regulation"
+  | "environment"
+  | "visualization";
 
 type LifeCoachStateFile = {
   version: 2;
@@ -99,6 +105,8 @@ type LifeCoachStateFile = {
 
 type InterventionSpec = {
   id: LifeCoachInterventionId;
+  primaryObjective: LifeCoachObjective;
+  strategy: InterventionStrategy;
   objectives: Partial<Record<LifeCoachObjective, number>>;
   effects: Partial<Record<LifeCoachObjective, number>>;
   baseFriction: number;
@@ -107,6 +115,7 @@ type InterventionSpec = {
   fallback: string;
   evidenceNote: string;
   toolHint: string;
+  supportsSora: boolean;
 };
 
 type ResolvedTone = "supportive" | "direct";
@@ -235,16 +244,6 @@ const FRUSTRATION_HINTS = [
 const GOAL_CUES = ["want", "goal", "trying to", "need to", "would like", "prefer", "helps", "works"];
 const AVOID_CUES = ["don't", "do not", "can't", "cannot", "hate", "dislike", "annoying", "frustrating", "stop"];
 
-const INTERVENTION_KEYWORDS: Record<LifeCoachInterventionId, string[]> = {
-  walk: ["walk", "outside", "steps", "exercise", "move"],
-  "social-block": ["social media", "instagram", "tiktok", "twitter", "x.com", "scroll"],
-  "focus-sprint": ["focus", "deep work", "pomodoro", "task", "procrastinating"],
-  breathing: ["breathing", "breath", "calm", "anxious", "panic"],
-  hydration: ["water", "hydrate", "dehydrated", "drink"],
-  "smoking-cessation": ["smoke", "smoking", "cigarette", "vape", "nicotine", "tobacco"],
-  "sora-visualization": ["visualization", "future self", "sora", "video"],
-};
-
 const OBJECTIVE_KEYWORDS: Record<LifeCoachObjective, string[]> = {
   mood: ["happy", "better", "mood", "sad", "down", "lonely"],
   energy: ["energy", "tired", "fatigue", "exhausted", "sleepy"],
@@ -301,203 +300,13 @@ const OBJECTIVE_LABELS: Record<LifeCoachObjective, string> = {
   stressRegulation: "stress resilience",
 };
 
-const INTERVENTIONS: InterventionSpec[] = [
-  {
-    id: "walk",
-    objectives: {
-      movement: 1,
-      mood: 0.7,
-      stressRegulation: 0.7,
-      focus: 0.5,
-      socialMediaReduction: 0.5,
-    },
-    effects: {
-      movement: 0.9,
-      mood: 0.45,
-      stressRegulation: 0.4,
-      focus: 0.35,
-      socialMediaReduction: 0.3,
-      energy: 0.2,
-    },
-    baseFriction: 0.4,
-    followUpMinutes: 45,
-    action: ({ needs, tone }) => {
-      const duration = needs.energy > 0.75 ? 10 : needs.focus > 0.7 ? 15 : 20;
-      return tone === "supportive"
-        ? `Take a ${duration}-minute walk now, without social apps open, and notice one detail around you every 2 minutes.`
-        : `Start a ${duration}-minute walk now. Keep your phone in pocket and no social feeds during the walk.`;
-    },
-    fallback: "If going outside is hard right now, do a 5-minute indoor walk and reopen this conversation.",
-    evidenceNote:
-      "Brief outdoor movement and light exposure are associated with better mood regulation and improved attentional control.",
-    toolHint: "Use a 10-20 minute timer and enable Do Not Disturb before starting the walk.",
-  },
-  {
-    id: "social-block",
-    objectives: {
-      socialMediaReduction: 1,
-      focus: 0.8,
-      stressRegulation: 0.5,
-    },
-    effects: {
-      socialMediaReduction: 0.95,
-      focus: 0.5,
-      stressRegulation: 0.2,
-      mood: 0.2,
-    },
-    baseFriction: 0.34,
-    followUpMinutes: 30,
-    action: ({ needs, tone }) => {
-      const duration = needs.socialMediaReduction > 0.75 ? 45 : 30;
-      return tone === "supportive"
-        ? `Set a ${duration}-minute social media block now (Instagram/TikTok/X/Shorts), then do one small offline action.`
-        : `Block social media for ${duration} minutes now. Immediately switch to one offline task for 10 minutes.`;
-    },
-    fallback: "If you cannot block apps, put the phone in another room for 15 minutes.",
-    evidenceNote:
-      "Reducing access to high-cue apps lowers compulsive checking and improves sustained attention in the next task window.",
-    toolHint: "Start an app/site blocker profile for 30-45 minutes and launch one offline next action.",
-  },
-  {
-    id: "focus-sprint",
-    objectives: {
-      focus: 1,
-      socialMediaReduction: 0.4,
-      mood: 0.2,
-    },
-    effects: {
-      focus: 0.9,
-      socialMediaReduction: 0.3,
-      mood: 0.2,
-      stressRegulation: 0.2,
-    },
-    baseFriction: 0.3,
-    followUpMinutes: 35,
-    action: ({ needs, tone }) => {
-      const minutes = needs.energy > 0.8 ? 15 : 25;
-      return tone === "supportive"
-        ? `Run one ${minutes}-minute focus sprint on the smallest meaningful task. Start with a 90-second setup only.`
-        : `Start one ${minutes}-minute deep-focus sprint now. Single task, notifications off, no social tabs.`;
-    },
-    fallback: "If focus is very low, do a 5-minute starter sprint and report what was completed.",
-    evidenceNote:
-      "Time-boxed single-task sprints reduce initiation friction and can decrease procrastination through clear stopping points.",
-    toolHint:
-      "Start a single-task timer (15-25 minutes), close social tabs, and keep only the current task visible.",
-  },
-  {
-    id: "breathing",
-    objectives: {
-      stressRegulation: 1,
-      mood: 0.4,
-      focus: 0.3,
-    },
-    effects: {
-      stressRegulation: 0.85,
-      mood: 0.3,
-      focus: 0.25,
-      energy: 0.1,
-    },
-    baseFriction: 0.16,
-    followUpMinutes: 15,
-    action: ({ tone }) =>
-      tone === "supportive"
-        ? "Do 3 minutes of 4-6 breathing now (inhale 4s, exhale 6s), then drink water."
-        : "Do 3 minutes of 4-6 breathing right now. Then send a one-line check-in.",
-    fallback: "If breathing feels hard, do 90 seconds of slow exhales only.",
-    evidenceNote:
-      "Slow exhale breathing can reduce acute sympathetic arousal and improve short-term emotional regulation.",
-    toolHint: "Use a breath timer/metronome for 3 minutes with 4-second inhale and 6-second exhale cadence.",
-  },
-  {
-    id: "hydration",
-    objectives: {
-      energy: 1,
-      mood: 0.35,
-      focus: 0.3,
-      movement: 0.25,
-    },
-    effects: {
-      energy: 0.65,
-      mood: 0.25,
-      focus: 0.25,
-      movement: 0.2,
-      stressRegulation: 0.15,
-    },
-    baseFriction: 0.14,
-    followUpMinutes: 20,
-    action: ({ tone }) =>
-      tone === "supportive"
-        ? "Drink a full glass of water, stand up for 2 minutes, and open a window or get daylight."
-        : "Hydrate now: one full glass of water, 2 minutes standing, then one concrete next task.",
-    fallback: "If water is not available, do the 2-minute stand + daylight reset first.",
-    evidenceNote:
-      "Hydration plus a brief posture/light reset can improve perceived alertness and readiness for cognitive work.",
-    toolHint: "Set a 2-minute stand timer, drink water, then write the next task in one sentence.",
-  },
-  {
-    id: "smoking-cessation",
-    objectives: {
-      stressRegulation: 0.8,
-      focus: 0.7,
-      energy: 0.6,
-      mood: 0.45,
-    },
-    effects: {
-      stressRegulation: 0.45,
-      focus: 0.35,
-      energy: 0.3,
-      mood: 0.25,
-      movement: 0.1,
-    },
-    baseFriction: 0.38,
-    followUpMinutes: 180,
-    action: ({ tone }) =>
-      tone === "supportive"
-        ? "Start a smoke-free plan now: remove visible cigarettes/vapes, set a quit date within 7 days, and contact cessation support today."
-        : "Start smoking cessation now: clear cigarettes/vapes, set a quit date in the next 7 days, and initiate support today.",
-    fallback:
-      "If full quit today feels too hard, start a strict 24-hour smoke-free block and ask for medication/counseling support.",
-    evidenceNote:
-      "Long-term smoking substantially shortens life expectancy, and evidence-based cessation treatment markedly improves quit success.",
-    toolHint:
-      "Create a quit checklist now (remove cues, quit date, support contact), and set reminders for craving windows.",
-  },
-  {
-    id: "sora-visualization",
-    objectives: {
-      mood: 0.9,
-      focus: 0.5,
-      socialMediaReduction: 0.5,
-      stressRegulation: 0.35,
-    },
-    effects: {
-      mood: 0.45,
-      focus: 0.3,
-      socialMediaReduction: 0.35,
-      stressRegulation: 0.2,
-    },
-    baseFriction: 0.5,
-    followUpMinutes: 40,
-    action: ({ tone }) =>
-      tone === "supportive"
-        ? "Watch a short future-self visualization (or imagine it for 60 seconds), then take the first tiny action immediately."
-        : "Use a 20-40s future-self visualization, then execute the first concrete action within 60 seconds.",
-    fallback: "If video generation is unavailable, run a 60-second guided mental visualization instead.",
-    evidenceNote:
-      "Future-self visualization can increase motivation when paired with an immediate concrete follow-through step.",
-    toolHint:
-      "Generate a short desired-state video or run a 60-second mental scene, then trigger a 5-minute action timer.",
-  },
-];
-
-const INTERVENTION_BY_ID: Record<LifeCoachInterventionId, InterventionSpec> = INTERVENTIONS.reduce(
-  (acc, spec) => {
-    acc[spec.id] = spec;
-    return acc;
-  },
-  {} as Record<LifeCoachInterventionId, InterventionSpec>,
-);
+const DYNAMIC_STRATEGY_SET = new Set<InterventionStrategy>([
+  "activation",
+  "friction",
+  "regulation",
+  "environment",
+  "visualization",
+]);
 
 const SCIENCE_REFERENCE_CACHE = new Map<
   string,
@@ -602,7 +411,7 @@ function normalizeAffectWeights(
 }
 
 function isInterventionId(value: string): value is LifeCoachInterventionId {
-  return Object.hasOwn(INTERVENTION_BY_ID, value);
+  return value.trim().length > 0;
 }
 
 function normalizeScienceTopic(
@@ -616,7 +425,7 @@ function normalizeScienceTopic(
   const id = typeof typed.id === "string" ? typed.id.trim().toLowerCase() : "";
   const recommendedInterventionRaw =
     typeof typed.recommendedIntervention === "string"
-      ? typed.recommendedIntervention.trim().toLowerCase()
+      ? typed.recommendedIntervention.trim()
       : "";
   const trajectoryForecast =
     typeof typed.trajectoryForecast === "string" ? typed.trajectoryForecast.trim() : "";
@@ -793,23 +602,149 @@ function summarizeRiskLabel(tokens: string[]): string {
   return top.join("-");
 }
 
-function inferScienceIntervention(messages: TranscriptMessage[], needs: LifeCoachNeedScores): LifeCoachInterventionId {
-  const recentUsers = messages.filter((msg) => msg.role === "user").slice(-24);
-  let best: { id: LifeCoachInterventionId; score: number } | undefined;
-  for (const spec of INTERVENTIONS) {
-    const keywordSignal = countMentions(recentUsers, INTERVENTION_KEYWORDS[spec.id]) / Math.max(1, recentUsers.length * 1.5);
-    let objectiveSignal = 0;
-    for (const objective of Object.keys(needs) as LifeCoachObjective[]) {
-      const alignment = spec.objectives[objective] ?? 0.2;
-      const effect = spec.effects[objective] ?? 0;
-      objectiveSignal += needs[objective] * alignment * effect;
-    }
-    const score = keywordSignal * 0.7 + objectiveSignal * 0.3;
-    if (!best || score > best.score) {
-      best = { id: spec.id, score };
-    }
+function isInterventionStrategy(value: string): value is InterventionStrategy {
+  return DYNAMIC_STRATEGY_SET.has(value as InterventionStrategy);
+}
+
+function buildDynamicInterventionId(params: {
+  primaryObjective: LifeCoachObjective;
+  strategy: InterventionStrategy;
+}): LifeCoachInterventionId {
+  return `dyn:${params.primaryObjective}:${params.strategy}`;
+}
+
+function parseDynamicInterventionId(
+  interventionId: string,
+): { primaryObjective: LifeCoachObjective; strategy: InterventionStrategy } | undefined {
+  const normalized = interventionId.trim().toLowerCase();
+  if (!normalized.startsWith("dyn:")) {
+    return undefined;
   }
-  return best?.id ?? "focus-sprint";
+  const [, objectiveRaw, strategyRaw] = normalized.split(":");
+  if (!objectiveRaw || !strategyRaw) {
+    return undefined;
+  }
+  const objectiveCanonical = (Object.keys(DEFAULT_OBJECTIVES) as LifeCoachObjective[]).find(
+    (objective) => objective.toLowerCase() === objectiveRaw,
+  );
+  if (!objectiveCanonical || !isInterventionStrategy(strategyRaw)) {
+    return undefined;
+  }
+  return {
+    primaryObjective: objectiveCanonical,
+    strategy: strategyRaw,
+  };
+}
+
+function inferPrimaryObjectiveFromNeeds(needs: LifeCoachNeedScores): LifeCoachObjective {
+  return (Object.entries(needs) as Array<[LifeCoachObjective, number]>).toSorted((a, b) => b[1] - a[1])[0]?.[0] ?? "focus";
+}
+
+function inferPrimaryObjectiveFromMessages(
+  messages: TranscriptMessage[],
+  needs: LifeCoachNeedScores,
+): LifeCoachObjective {
+  const recentUsers = messages.filter((msg) => msg.role === "user").slice(-24);
+  if (recentUsers.length === 0) {
+    return inferPrimaryObjectiveFromNeeds(needs);
+  }
+  const denom = Math.max(1, recentUsers.length * 2);
+  const scored = (Object.keys(OBJECTIVE_KEYWORDS) as LifeCoachObjective[]).map((objective) => {
+    const keywordSignal = countMentions(recentUsers, OBJECTIVE_KEYWORDS[objective]) / denom;
+    const needSignal = needs[objective] ?? 0;
+    return [objective, keywordSignal * 0.55 + needSignal * 0.45] as const;
+  });
+  return scored.toSorted((a, b) => b[1] - a[1])[0]?.[0] ?? inferPrimaryObjectiveFromNeeds(needs);
+}
+
+function inferStrategyFromContext(params: {
+  messages: TranscriptMessage[];
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  primaryObjective: LifeCoachObjective;
+  allowVisualization?: boolean;
+}): InterventionStrategy {
+  const recentUsers = params.messages.filter((msg) => msg.role === "user").slice(-24);
+  const text = recentUsers.map((msg) => msg.text).join(" ");
+
+  if (
+    params.allowVisualization !== false &&
+    (text.includes("sora") || text.includes("visualize") || text.includes("imagine the desired"))
+  ) {
+    return "visualization";
+  }
+  if (params.primaryObjective === "stressRegulation" || params.affect.distress > 0.65) {
+    return "regulation";
+  }
+  if (
+    params.primaryObjective === "socialMediaReduction" ||
+    countHintMatches(text, SOCIAL_URGE_HINTS) > 0
+  ) {
+    return "friction";
+  }
+  if (params.affect.momentum > 0.6 || params.primaryObjective === "movement") {
+    return "activation";
+  }
+  if (params.needs.focus > 0.6 || params.primaryObjective === "focus") {
+    return "environment";
+  }
+  return "activation";
+}
+
+function inferStrategyFromInterventionId(interventionId: string): InterventionStrategy | undefined {
+  const normalized = interventionId.toLowerCase();
+  if (
+    normalized.includes("visual") ||
+    normalized.includes("sora") ||
+    normalized.includes("imagery")
+  ) {
+    return "visualization";
+  }
+  if (
+    normalized.includes("friction") ||
+    normalized.includes("block") ||
+    normalized.includes("limit") ||
+    normalized.includes("shield")
+  ) {
+    return "friction";
+  }
+  if (
+    normalized.includes("regulat") ||
+    normalized.includes("breath") ||
+    normalized.includes("ground") ||
+    normalized.includes("calm")
+  ) {
+    return "regulation";
+  }
+  if (
+    normalized.includes("environment") ||
+    normalized.includes("setup") ||
+    normalized.includes("context")
+  ) {
+    return "environment";
+  }
+  if (normalized.includes("start") || normalized.includes("activation") || normalized.includes("sprint")) {
+    return "activation";
+  }
+  return undefined;
+}
+
+function inferScienceIntervention(
+  messages: TranscriptMessage[],
+  needs: LifeCoachNeedScores,
+  affect: LifeCoachAffectScores,
+): LifeCoachInterventionId {
+  const primaryObjective = inferPrimaryObjectiveFromMessages(messages, needs);
+  const strategy = inferStrategyFromContext({
+    messages,
+    needs,
+    affect,
+    primaryObjective,
+  });
+  return buildDynamicInterventionId({
+    primaryObjective,
+    strategy,
+  });
 }
 
 async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown | undefined> {
@@ -914,7 +849,11 @@ async function deriveDynamicScienceInsight(params: {
   if (confidence < runtime.minConfidence) {
     return undefined;
   }
-  const recommendedIntervention = inferScienceIntervention(recentUsers, params.needs);
+  const recommendedIntervention = inferScienceIntervention(
+    recentUsers,
+    params.needs,
+    params.affect,
+  );
   const references = await fetchDynamicScienceReferences({
     query,
     maxPapers: runtime.maxPapers,
@@ -923,7 +862,14 @@ async function deriveDynamicScienceInsight(params: {
   });
   const trajectoryForecast = `If the current pattern around "${riskId}" continues, ${primaryNeedLabel} is likely to remain constrained over time.`;
   const improvementForecast = `If intervention is applied consistently and tracked, ${primaryNeedLabel} should improve in the coming weeks.`;
-  const recommendedAction = INTERVENTION_BY_ID[recommendedIntervention].action({
+  const recommendedSpec = materializeInterventionSpec({
+    interventionId: recommendedIntervention,
+    needs: params.needs,
+    affect: params.affect,
+    messages: recentUsers,
+    allowSoraVisualization: params.lifeCoach?.allowSoraVisualization ?? DEFAULT_ALLOW_SORA,
+  });
+  const recommendedAction = recommendedSpec.action({
     needs: params.needs,
     tone: params.affect.distress > 0.6 ? "supportive" : "direct",
   });
@@ -1018,15 +964,7 @@ async function loadTranscriptMessages(sessionFile?: string): Promise<TranscriptM
 }
 
 function emptyStats(): LifeCoachStats {
-  return {
-    walk: { sent: 0, completed: 0, ignored: 0, rejected: 0 },
-    "social-block": { sent: 0, completed: 0, ignored: 0, rejected: 0 },
-    "focus-sprint": { sent: 0, completed: 0, ignored: 0, rejected: 0 },
-    breathing: { sent: 0, completed: 0, ignored: 0, rejected: 0 },
-    hydration: { sent: 0, completed: 0, ignored: 0, rejected: 0 },
-    "smoking-cessation": { sent: 0, completed: 0, ignored: 0, rejected: 0 },
-    "sora-visualization": { sent: 0, completed: 0, ignored: 0, rejected: 0 },
-  };
+  return {};
 }
 
 function emptyPreferenceModel(): LifeCoachPreferenceModel {
@@ -1039,15 +977,7 @@ function emptyPreferenceModel(): LifeCoachPreferenceModel {
       socialMediaReduction: 0,
       stressRegulation: 0,
     },
-    interventionAffinity: {
-      walk: 0,
-      "social-block": 0,
-      "focus-sprint": 0,
-      breathing: 0,
-      hydration: 0,
-      "smoking-cessation": 0,
-      "sora-visualization": 0,
-    },
+    interventionAffinity: {},
     supportiveToneBias: 0,
     lastLearnedMessageTs: 0,
   };
@@ -1092,23 +1022,16 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
   };
   const sourceStats = value.stats;
   if (sourceStats && typeof sourceStats === "object") {
-    for (const spec of INTERVENTIONS) {
-      const entry = (sourceStats as Record<string, unknown>)[spec.id];
-      if (!entry || typeof entry !== "object") {
+    for (const [interventionId, entry] of Object.entries(sourceStats as Record<string, unknown>)) {
+      if (!entry || typeof entry !== "object" || !interventionId.trim()) {
         continue;
       }
-      const typed = entry as Partial<LifeCoachStats[LifeCoachInterventionId]>;
-      normalized.stats[spec.id] = {
+      const typed = entry as Partial<LifeCoachInterventionStat>;
+      normalized.stats[interventionId] = {
         sent: Number.isFinite(typed.sent) ? Math.max(0, Math.floor(typed.sent as number)) : 0,
-        completed: Number.isFinite(typed.completed)
-          ? Math.max(0, Math.floor(typed.completed as number))
-          : 0,
-        ignored: Number.isFinite(typed.ignored)
-          ? Math.max(0, Math.floor(typed.ignored as number))
-          : 0,
-        rejected: Number.isFinite(typed.rejected)
-          ? Math.max(0, Math.floor(typed.rejected as number))
-          : 0,
+        completed: Number.isFinite(typed.completed) ? Math.max(0, Math.floor(typed.completed as number)) : 0,
+        ignored: Number.isFinite(typed.ignored) ? Math.max(0, Math.floor(typed.ignored as number)) : 0,
+        rejected: Number.isFinite(typed.rejected) ? Math.max(0, Math.floor(typed.rejected as number)) : 0,
       };
     }
   }
@@ -1116,22 +1039,18 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
   if (sourcePreferences && typeof sourcePreferences === "object") {
     const typed = sourcePreferences as Partial<LifeCoachPreferenceModel>;
     const objectiveBias = typed.objectiveBias as Partial<Record<LifeCoachObjective, number>> | undefined;
-    const interventionAffinity = typed.interventionAffinity as
-      | Partial<Record<LifeCoachInterventionId, number>>
-      | undefined;
+    const interventionAffinity = typed.interventionAffinity as Partial<Record<string, number>> | undefined;
     for (const objective of Object.keys(normalized.preferences.objectiveBias) as LifeCoachObjective[]) {
       const valueForObjective = objectiveBias?.[objective];
       if (typeof valueForObjective === "number") {
         normalized.preferences.objectiveBias[objective] = clampSigned(valueForObjective);
       }
     }
-    for (const intervention of Object.keys(
-      normalized.preferences.interventionAffinity,
-    ) as LifeCoachInterventionId[]) {
-      const valueForIntervention = interventionAffinity?.[intervention];
-      if (typeof valueForIntervention === "number") {
-        normalized.preferences.interventionAffinity[intervention] = clampSigned(valueForIntervention);
+    for (const [intervention, valueForIntervention] of Object.entries(interventionAffinity ?? {})) {
+      if (!intervention.trim() || typeof valueForIntervention !== "number") {
+        continue;
       }
+      normalized.preferences.interventionAffinity[intervention] = clampSigned(valueForIntervention);
     }
     if (typeof typed.supportiveToneBias === "number") {
       normalized.preferences.supportiveToneBias = clampSigned(typed.supportiveToneBias);
@@ -1157,24 +1076,11 @@ function resolveFollowUpAction(params: {
   const prefix = params.tone === "supportive" ? supportivePrefix : directPrefix;
   const doneToken = params.actionContract.enabled ? params.actionContract.doneToken : "done";
   const helpToken = params.actionContract.enabled ? params.actionContract.helpToken : "need help";
-  switch (params.intervention) {
-    case "walk":
-      return `${prefix} did you complete the walk? If not, do a 7-minute version now and reply ${doneToken}.`;
-    case "social-block":
-      return `${prefix} are distracting social apps still blocked? If not, block for 20 minutes now and reply ${doneToken} or ${helpToken}.`;
-    case "focus-sprint":
-      return `${prefix} did the focus sprint happen? If not, run a 10-minute sprint now and send one line of progress.`;
-    case "breathing":
-      return `${prefix} take 2 minutes of slow breathing now and confirm when finished.`;
-    case "hydration":
-      return `${prefix} drink one full glass of water now and reply ${doneToken}.`;
-    case "smoking-cessation":
-      return `${prefix} are you still on the smoke-free plan? If there was a slip, restart now and reply ${doneToken} or ${helpToken}.`;
-    case "sora-visualization":
-      return `${prefix} run the 60-second desired-state visualization and start one immediate action, then reply ${doneToken}.`;
-    default:
-      return `${prefix} complete the next tiny step now and reply ${doneToken}.`;
-  }
+  const interventionLabel = normalizeInterventionLabel(params.intervention);
+  return (
+    `${prefix} did the "${interventionLabel}" step happen? ` +
+    `If blocked, run a 5-minute reduced version now and reply ${doneToken} or ${helpToken}.`
+  );
 }
 
 function findDueFollowUp(
@@ -1307,11 +1213,368 @@ function resolveTone(params: {
   return stressLoad >= 0.6 ? "supportive" : "direct";
 }
 
-function resolveActiveInterventions(cfg?: HeartbeatLifeCoachConfig): InterventionSpec[] {
+function normalizeInterventionLabel(value: string): string {
+  return value.replace(/^dyn:/, "").replaceAll(":", " ");
+}
+
+function objectiveTitle(objective: LifeCoachObjective): string {
+  return OBJECTIVE_LABELS[objective] ?? objective;
+}
+
+function createInterventionObjectiveWeights(
+  primaryObjective: LifeCoachObjective,
+  strategy: InterventionStrategy,
+): Partial<Record<LifeCoachObjective, number>> {
+  const weights: Partial<Record<LifeCoachObjective, number>> = {
+    [primaryObjective]: 1,
+  };
+  if (strategy === "regulation") {
+    weights.stressRegulation = Math.max(weights.stressRegulation ?? 0, 0.85);
+    weights.mood = Math.max(weights.mood ?? 0, 0.55);
+  }
+  if (strategy === "friction") {
+    weights.socialMediaReduction = Math.max(weights.socialMediaReduction ?? 0, 0.8);
+    weights.focus = Math.max(weights.focus ?? 0, 0.5);
+  }
+  if (strategy === "activation") {
+    weights.movement = Math.max(weights.movement ?? 0, 0.45);
+    weights.focus = Math.max(weights.focus ?? 0, 0.45);
+  }
+  if (strategy === "environment") {
+    weights.focus = Math.max(weights.focus ?? 0, 0.65);
+    weights.energy = Math.max(weights.energy ?? 0, 0.4);
+  }
+  if (strategy === "visualization") {
+    weights.mood = Math.max(weights.mood ?? 0, 0.5);
+    weights.focus = Math.max(weights.focus ?? 0, 0.4);
+  }
+  return weights;
+}
+
+function createInterventionEffects(
+  primaryObjective: LifeCoachObjective,
+  strategy: InterventionStrategy,
+): Partial<Record<LifeCoachObjective, number>> {
+  const effects: Partial<Record<LifeCoachObjective, number>> = {
+    [primaryObjective]: 0.72,
+  };
+  if (strategy === "regulation") {
+    effects.stressRegulation = Math.max(effects.stressRegulation ?? 0, 0.8);
+    effects.mood = Math.max(effects.mood ?? 0, 0.55);
+    effects.focus = Math.max(effects.focus ?? 0, 0.38);
+  } else if (strategy === "friction") {
+    effects.socialMediaReduction = Math.max(effects.socialMediaReduction ?? 0, 0.8);
+    effects.focus = Math.max(effects.focus ?? 0, 0.62);
+  } else if (strategy === "environment") {
+    effects.focus = Math.max(effects.focus ?? 0, 0.68);
+    effects.energy = Math.max(effects.energy ?? 0, 0.42);
+  } else if (strategy === "activation") {
+    effects.movement = Math.max(effects.movement ?? 0, 0.66);
+    effects.energy = Math.max(effects.energy ?? 0, 0.52);
+    effects.mood = Math.max(effects.mood ?? 0, 0.42);
+  } else {
+    effects.focus = Math.max(effects.focus ?? 0, 0.44);
+    effects.mood = Math.max(effects.mood ?? 0, 0.52);
+  }
+  return effects;
+}
+
+function baseFrictionForStrategy(strategy: InterventionStrategy): number {
+  if (strategy === "activation") {
+    return 0.2;
+  }
+  if (strategy === "regulation") {
+    return 0.18;
+  }
+  if (strategy === "friction") {
+    return 0.24;
+  }
+  if (strategy === "environment") {
+    return 0.28;
+  }
+  return 0.34;
+}
+
+function followUpMinutesForStrategy(strategy: InterventionStrategy): number {
+  if (strategy === "activation") {
+    return 25;
+  }
+  if (strategy === "friction") {
+    return 35;
+  }
+  if (strategy === "regulation") {
+    return 20;
+  }
+  if (strategy === "environment") {
+    return 30;
+  }
+  return 40;
+}
+
+function actionTemplate(params: {
+  primaryObjective: LifeCoachObjective;
+  strategy: InterventionStrategy;
+  tone: ResolvedTone;
+}): string {
+  const supportivePrefix = "Gentle next step:";
+  const directPrefix = "Do this now:";
+  const prefix = params.tone === "supportive" ? supportivePrefix : directPrefix;
+
+  if (params.strategy === "regulation") {
+    return `${prefix} take 90 seconds for 6 slow breaths (4s in, 6s out), then pick one concrete next action.`;
+  }
+  if (params.strategy === "friction") {
+    if (params.primaryObjective === "socialMediaReduction") {
+      return `${prefix} block distracting feeds for 30 minutes and place your phone out of reach before starting your next task.`;
+    }
+    return `${prefix} add one friction layer to distractions (mute, blocker, or device distance) and start a 12-minute focus block.`;
+  }
+  if (params.strategy === "environment") {
+    return `${prefix} reset your environment for ${objectiveTitle(params.primaryObjective)}: clear one blocker, open only one task, then run a 15-minute timer.`;
+  }
+  if (params.strategy === "visualization") {
+    return `${prefix} run a short Sora-style scene of yourself executing the first minute, then immediately do that first minute in real life.`;
+  }
+  if (params.primaryObjective === "movement") {
+    return `${prefix} stand up now, step outside if possible, and walk for 10 minutes without feeds.`;
+  }
+  if (params.primaryObjective === "energy") {
+    return `${prefix} drink water, get daylight for 2 minutes, then start one low-friction task for 10 minutes.`;
+  }
+  if (params.primaryObjective === "mood") {
+    return `${prefix} send one short message to someone supportive or write one grounding sentence, then start a 5-minute action.`;
+  }
+  if (params.primaryObjective === "stressRegulation") {
+    return `${prefix} take one calming reset (breath + posture), then do the smallest executable next step for 5 minutes.`;
+  }
+  return `${prefix} choose one meaningful task and run a 15-minute focused start right now.`;
+}
+
+function fallbackTemplate(params: {
+  primaryObjective: LifeCoachObjective;
+  strategy: InterventionStrategy;
+}): string {
+  const label = objectiveTitle(params.primaryObjective);
+  if (params.strategy === "visualization") {
+    return `If visualization feels heavy, skip video and execute a 3-minute real-world start aimed at ${label}.`;
+  }
+  return `If this feels too big, scale to a 3-5 minute version focused on ${label}.`;
+}
+
+function evidenceNoteTemplate(params: {
+  primaryObjective: LifeCoachObjective;
+  strategy: InterventionStrategy;
+}): string {
+  if (params.strategy === "regulation") {
+    return "Short breathing and grounding resets can reduce acute distress and improve follow-through on next actions.";
+  }
+  if (params.strategy === "friction") {
+    return "Adding friction to cues and triggers is a robust behavior-change tactic for reducing impulsive loops.";
+  }
+  if (params.strategy === "environment") {
+    return "Environmental structuring reduces decision overhead and increases execution reliability.";
+  }
+  if (params.strategy === "visualization") {
+    return "Brief implementation imagery can improve initiation when paired with immediate real-world execution.";
+  }
+  return "Immediate micro-activation helps break inertia and can increase completion momentum.";
+}
+
+function toolHintTemplate(params: {
+  primaryObjective: LifeCoachObjective;
+  strategy: InterventionStrategy;
+}): string {
+  if (params.strategy === "friction") {
+    return "Use app blocker + DND + physical device distance, then start a timer.";
+  }
+  if (params.strategy === "regulation") {
+    return "Use a breath timer and a single-item checklist for the next action.";
+  }
+  if (params.strategy === "environment") {
+    return "Prepare one-task workspace and run a 15-minute focus timer.";
+  }
+  if (params.strategy === "visualization") {
+    return "Use Sora prompt generation only if it immediately leads to a concrete physical step.";
+  }
+  if (params.primaryObjective === "movement") {
+    return "Start a 10-minute walk timer and leave the phone in pocket mode.";
+  }
+  return "Use one visible timer and one explicit success criterion.";
+}
+
+function inferInterventionSemantics(params: {
+  interventionId: string;
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  messages: TranscriptMessage[];
+  allowSoraVisualization: boolean;
+}): { primaryObjective: LifeCoachObjective; strategy: InterventionStrategy } {
+  const parsed = parseDynamicInterventionId(params.interventionId);
+  if (parsed) {
+    if (parsed.strategy === "visualization" && !params.allowSoraVisualization) {
+      return { primaryObjective: parsed.primaryObjective, strategy: "activation" };
+    }
+    return parsed;
+  }
+  const inferredObjective =
+    inferObjectivesFromInterventionId(params.interventionId)[0] ??
+    inferPrimaryObjectiveFromMessages(params.messages, params.needs);
+  const inferredStrategy =
+    inferStrategyFromInterventionId(params.interventionId) ??
+    inferStrategyFromContext({
+      messages: params.messages,
+      needs: params.needs,
+      affect: params.affect,
+      primaryObjective: inferredObjective,
+      allowVisualization: params.allowSoraVisualization,
+    });
+  if (inferredStrategy === "visualization" && !params.allowSoraVisualization) {
+    return { primaryObjective: inferredObjective, strategy: "activation" };
+  }
+  return {
+    primaryObjective: inferredObjective,
+    strategy: inferredStrategy,
+  };
+}
+
+function materializeInterventionSpec(params: {
+  interventionId: LifeCoachInterventionId;
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  messages: TranscriptMessage[];
+  allowSoraVisualization: boolean;
+}): InterventionSpec {
+  const semantics = inferInterventionSemantics({
+    interventionId: params.interventionId,
+    needs: params.needs,
+    affect: params.affect,
+    messages: params.messages,
+    allowSoraVisualization: params.allowSoraVisualization,
+  });
+  return {
+    id: params.interventionId,
+    primaryObjective: semantics.primaryObjective,
+    strategy: semantics.strategy,
+    objectives: createInterventionObjectiveWeights(semantics.primaryObjective, semantics.strategy),
+    effects: createInterventionEffects(semantics.primaryObjective, semantics.strategy),
+    baseFriction: baseFrictionForStrategy(semantics.strategy),
+    followUpMinutes: followUpMinutesForStrategy(semantics.strategy),
+    action: ({ tone }) =>
+      actionTemplate({
+        primaryObjective: semantics.primaryObjective,
+        strategy: semantics.strategy,
+        tone,
+      }),
+    fallback: fallbackTemplate({
+      primaryObjective: semantics.primaryObjective,
+      strategy: semantics.strategy,
+    }),
+    evidenceNote: evidenceNoteTemplate({
+      primaryObjective: semantics.primaryObjective,
+      strategy: semantics.strategy,
+    }),
+    toolHint: toolHintTemplate({
+      primaryObjective: semantics.primaryObjective,
+      strategy: semantics.strategy,
+    }),
+    supportsSora: semantics.strategy === "visualization",
+  };
+}
+
+function resolveStrategiesForObjective(params: {
+  objective: LifeCoachObjective;
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  allowSoraVisualization: boolean;
+}): InterventionStrategy[] {
+  const strategies = new Set<InterventionStrategy>();
+  strategies.add("activation");
+  strategies.add("environment");
+  if (
+    params.objective === "socialMediaReduction" ||
+    params.objective === "focus" ||
+    params.needs.socialMediaReduction > 0.55
+  ) {
+    strategies.add("friction");
+  }
+  if (
+    params.objective === "stressRegulation" ||
+    params.objective === "mood" ||
+    params.affect.distress > 0.55
+  ) {
+    strategies.add("regulation");
+  }
+  if (params.allowSoraVisualization && params.affect.momentum < 0.75) {
+    strategies.add("visualization");
+  }
+  return [...strategies];
+}
+
+function buildDynamicInterventions(params: {
+  messages: TranscriptMessage[];
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  allowSoraVisualization: boolean;
+  scienceInsight?: ScienceInsight;
+}): InterventionSpec[] {
+  const rankedObjectives = (Object.entries(params.needs) as Array<[LifeCoachObjective, number]>).toSorted(
+    (a, b) => b[1] - a[1],
+  );
+  const selectedObjectives = rankedObjectives
+    .filter(([, score], idx) => score >= 0.25 || idx === 0)
+    .slice(0, 3)
+    .map(([objective]) => objective);
+  const generated = new Map<string, InterventionSpec>();
+
+  for (const objective of selectedObjectives) {
+    const strategies = resolveStrategiesForObjective({
+      objective,
+      needs: params.needs,
+      affect: params.affect,
+      allowSoraVisualization: params.allowSoraVisualization,
+    });
+    for (const strategy of strategies) {
+      const id = buildDynamicInterventionId({
+        primaryObjective: objective,
+        strategy,
+      });
+      generated.set(
+        id,
+        materializeInterventionSpec({
+          interventionId: id,
+          needs: params.needs,
+          affect: params.affect,
+          messages: params.messages,
+          allowSoraVisualization: params.allowSoraVisualization,
+        }),
+      );
+    }
+  }
+  if (params.scienceInsight?.recommendedIntervention) {
+    const recommendedId = params.scienceInsight.recommendedIntervention;
+    generated.set(
+      recommendedId,
+      materializeInterventionSpec({
+        interventionId: recommendedId,
+        needs: params.needs,
+        affect: params.affect,
+        messages: params.messages,
+        allowSoraVisualization: params.allowSoraVisualization,
+      }),
+    );
+  }
+  return [...generated.values()];
+}
+
+function resolveActiveInterventions(
+  candidates: InterventionSpec[],
+  cfg?: HeartbeatLifeCoachConfig,
+): InterventionSpec[] {
   const allow = new Set(cfg?.interventions?.allow ?? []);
   const deny = new Set(cfg?.interventions?.deny ?? []);
-  return INTERVENTIONS.filter((spec) => {
-    if (spec.id === "sora-visualization" && cfg?.allowSoraVisualization === false) {
+  const allowSoraVisualization = cfg?.allowSoraVisualization ?? DEFAULT_ALLOW_SORA;
+  return candidates.filter((spec) => {
+    if (spec.supportsSora && !allowSoraVisualization) {
       return false;
     }
     if (allow.size > 0 && !allow.has(spec.id)) {
@@ -1456,24 +1719,37 @@ function countNudgesInWindow(state: LifeCoachStateFile, now: number, windowMs: n
   return state.history.filter((entry) => now - entry.sentAt <= windowMs).length;
 }
 
+function emptyStat(): LifeCoachInterventionStat {
+  return { sent: 0, completed: 0, ignored: 0, rejected: 0 };
+}
+
+function ensureInterventionStat(state: LifeCoachStateFile, interventionId: string): LifeCoachInterventionStat {
+  if (!state.stats[interventionId]) {
+    state.stats[interventionId] = emptyStat();
+  }
+  return state.stats[interventionId];
+}
+
 function completionProbability(
-  stats: LifeCoachStats[LifeCoachInterventionId],
+  stats: LifeCoachInterventionStat | undefined,
   tone: ResolvedTone,
 ): number {
-  const total = stats.sent;
+  const normalized = stats ?? emptyStat();
+  const total = normalized.sent;
   if (total <= 0) {
     return tone === "supportive" ? 0.62 : 0.58;
   }
-  const successRate = (stats.completed + 1) / (total + 2);
-  const rejectRate = stats.rejected / Math.max(1, total);
+  const successRate = (normalized.completed + 1) / (total + 2);
+  const rejectRate = normalized.rejected / Math.max(1, total);
   return clamp01(successRate * (tone === "supportive" ? 1.04 : 1) - rejectRate * 0.25);
 }
 
-function rejectionRisk(stats: LifeCoachStats[LifeCoachInterventionId]): number {
-  if (stats.sent <= 0) {
+function rejectionRisk(stats: LifeCoachInterventionStat | undefined): number {
+  const normalized = stats ?? emptyStat();
+  if (normalized.sent <= 0) {
     return 0.12;
   }
-  return clamp01(stats.rejected / stats.sent);
+  return clamp01(normalized.rejected / normalized.sent);
 }
 
 function learnPreferencesFromMessages(params: {
@@ -1508,28 +1784,6 @@ function learnPreferencesFromMessages(params: {
         clampSigned(params.state.preferences.objectiveBias[objective] + upDelta - downDelta),
       );
     }
-    for (const intervention of Object.keys(INTERVENTION_KEYWORDS) as LifeCoachInterventionId[]) {
-      const mentions = countHintMatches(text, INTERVENTION_KEYWORDS[intervention]);
-      if (mentions <= 0) {
-        continue;
-      }
-      let delta = 0;
-      if (positiveCueHits > 0) {
-        delta += 0.03 * positiveCueHits;
-      }
-      if (avoidCueHits > 0) {
-        delta -= 0.05 * avoidCueHits;
-      }
-      if (completionHits > 0) {
-        delta += 0.04;
-      }
-      if (frustrationHits > 0) {
-        delta -= 0.02 * frustrationHits;
-      }
-      params.state.preferences.interventionAffinity[intervention] = round2(
-        clampSigned(params.state.preferences.interventionAffinity[intervention] + delta * mentions),
-      );
-    }
     if (frustrationHits > 0) {
       params.state.preferences.supportiveToneBias = round2(
         clampSigned(params.state.preferences.supportiveToneBias + 0.08 * frustrationHits),
@@ -1546,6 +1800,47 @@ function learnPreferencesFromMessages(params: {
   params.state.preferences.lastLearnedMessageTs = maxTimestamp;
 }
 
+function inferObjectivesFromInterventionId(intervention: string): LifeCoachObjective[] {
+  const parsed = parseDynamicInterventionId(intervention);
+  if (parsed) {
+    return [parsed.primaryObjective];
+  }
+  const normalized = intervention.toLowerCase();
+  const guessed: LifeCoachObjective[] = [];
+  for (const objective of Object.keys(OBJECTIVE_KEYWORDS) as LifeCoachObjective[]) {
+    if (normalized.includes(objective.toLowerCase())) {
+      guessed.push(objective);
+    }
+  }
+  if (normalized.includes("focus")) {
+    guessed.push("focus");
+  }
+  if (normalized.includes("social") || normalized.includes("scroll")) {
+    guessed.push("socialMediaReduction");
+  }
+  if (normalized.includes("stress") || normalized.includes("breath") || normalized.includes("calm")) {
+    guessed.push("stressRegulation");
+  }
+  if (normalized.includes("move") || normalized.includes("walk") || normalized.includes("exercise")) {
+    guessed.push("movement");
+  }
+  if (normalized.includes("energy") || normalized.includes("sleep") || normalized.includes("hydrate")) {
+    guessed.push("energy");
+  }
+  if (normalized.includes("mood")) {
+    guessed.push("mood");
+  }
+  if (normalized.includes("smok") || normalized.includes("nicotine") || normalized.includes("vape")) {
+    guessed.push("stressRegulation");
+    guessed.push("focus");
+  }
+  if (!guessed.length) {
+    const topObjective = (Object.keys(DEFAULT_OBJECTIVES) as LifeCoachObjective[])[0];
+    guessed.push(topObjective);
+  }
+  return [...new Set(guessed)];
+}
+
 function learnPreferencesFromOutcome(params: {
   state: LifeCoachStateFile;
   intervention: LifeCoachInterventionId;
@@ -1557,21 +1852,19 @@ function learnPreferencesFromOutcome(params: {
   }
   const affinityDelta =
     params.status === "completed" ? 0.08 : params.status === "ignored" ? -0.04 : -0.1;
+  const currentAffinity = params.state.preferences.interventionAffinity[params.intervention] ?? 0;
   params.state.preferences.interventionAffinity[params.intervention] = round2(
-    clampSigned(params.state.preferences.interventionAffinity[params.intervention] + affinityDelta),
+    clampSigned(currentAffinity + affinityDelta),
   );
-  const spec = INTERVENTION_BY_ID[params.intervention];
-  if (spec) {
-    for (const objective of Object.keys(spec.effects) as LifeCoachObjective[]) {
-      const effect = spec.effects[objective] ?? 0;
-      const delta = params.status === "completed" ? effect * 0.03 : params.status === "rejected" ? -effect * 0.02 : 0;
-      if (!delta) {
-        continue;
-      }
-      params.state.preferences.objectiveBias[objective] = round2(
-        clampSigned(params.state.preferences.objectiveBias[objective] + delta),
-      );
+  const inferredObjectives = inferObjectivesFromInterventionId(params.intervention);
+  for (const objective of inferredObjectives) {
+    const delta = params.status === "completed" ? 0.03 : params.status === "rejected" ? -0.02 : 0;
+    if (!delta) {
+      continue;
     }
+    params.state.preferences.objectiveBias[objective] = round2(
+      clampSigned(params.state.preferences.objectiveBias[objective] + delta),
+    );
   }
   if (params.status === "rejected") {
     const toneDelta = params.tone === "direct" ? 0.08 : 0.03;
@@ -1628,11 +1921,11 @@ function adjustFollowUpMinutes(baseFollowUpMinutes: number, affect: LifeCoachAff
 }
 
 function resolveSoraPrompt(decision: {
-  intervention: LifeCoachInterventionId;
+  spec: InterventionSpec;
   needs: LifeCoachNeedScores;
   affect: LifeCoachAffectScores;
 }): string | undefined {
-  if (decision.intervention !== "sora-visualization") {
+  if (!decision.spec.supportsSora) {
     return undefined;
   }
   const topNeed = (Object.entries(decision.needs) as Array<[LifeCoachObjective, number]>).toSorted(
@@ -1726,7 +2019,7 @@ function updatePendingOutcomes(params: {
   }
 
   pending.status = nextStatus;
-  const stat = params.state.stats[pending.intervention];
+  const stat = ensureInterventionStat(params.state, pending.intervention);
   if (nextStatus === "completed") {
     stat.completed += 1;
   } else if (nextStatus === "ignored") {
@@ -1752,7 +2045,6 @@ function selectIntervention(params: {
   tone: ResolvedTone;
   relapsePressure: number;
   scienceInsight?: ScienceInsight;
-  now: number;
 }): LifeCoachDecision | undefined {
   if (params.scienceInsight?.forceIntervention) {
     const prioritySpec = params.activeInterventions.find(
@@ -1807,19 +2099,28 @@ function selectIntervention(params: {
       (params.affect.frustration > 0.55 && spec.baseFriction > 0.28 ? 0.1 : 0);
     const relapseBoost =
       params.relapsePressure > 0.45 && params.needs.socialMediaReduction > 0.6
-        ? spec.id === "walk" || spec.id === "breathing"
+        ? spec.primaryObjective === "socialMediaReduction" && spec.strategy === "friction"
           ? 0.12
-          : spec.id === "social-block"
-            ? 0.05
+          : spec.primaryObjective === "focus" &&
+              (spec.strategy === "activation" || spec.strategy === "environment")
+            ? 0.07
+            : spec.strategy === "regulation"
+              ? 0.05
             : 0
         : 0;
     const distressBoost =
       params.affect.distress > 0.55 &&
-      (spec.id === "breathing" || spec.id === "walk" || spec.id === "hydration")
+      (spec.strategy === "regulation" ||
+        spec.primaryObjective === "stressRegulation" ||
+        spec.primaryObjective === "mood")
         ? 0.1
+        : params.affect.distress > 0.55 &&
+            (spec.primaryObjective === "movement" || spec.primaryObjective === "energy")
+          ? 0.06
         : 0;
     const momentumBoost =
-      params.affect.momentum > 0.6 && (spec.id === "focus-sprint" || spec.id === "social-block")
+      params.affect.momentum > 0.6 &&
+      (spec.strategy === "activation" || spec.strategy === "friction")
         ? 0.08
         : 0;
     const scienceBoost =
@@ -1840,6 +2141,7 @@ function selectIntervention(params: {
       `expectedGain=${round2(expectedGain)}, completion=${round2(completionProb)}, ` +
       `friction=${round2(friction)}, reactance=${round2(reactance)}, fatigue=${round2(fatigue)}, ` +
       `affinity=${round2(preferenceAffinity)}, relapse=${round2(params.relapsePressure)}, ` +
+      `objective=${spec.primaryObjective}, strategy=${spec.strategy}, ` +
       `scienceBoost=${round2(scienceBoost)}, frustration=${round2(params.affect.frustration)}, ` +
       `distress=${round2(params.affect.distress)}`;
 
@@ -1864,7 +2166,7 @@ function selectIntervention(params: {
     followUpMinutes,
     tone: params.tone,
     soraPrompt: resolveSoraPrompt({
-      intervention: best.spec.id,
+      spec: best.spec,
       needs: params.needs,
       affect: params.affect,
     }),
@@ -1887,7 +2189,13 @@ function createFollowUpDecision(params: {
     helpToken: string;
   };
 }): LifeCoachDecision {
-  const spec = INTERVENTION_BY_ID[params.pending.intervention];
+  const spec = materializeInterventionSpec({
+    interventionId: params.pending.intervention,
+    needs: params.needs,
+    affect: params.affect,
+    messages: [],
+    allowSoraVisualization: true,
+  });
   return {
     phase: "follow-up",
     intervention: params.pending.intervention,
@@ -1903,8 +2211,8 @@ function createFollowUpDecision(params: {
     tone: params.tone,
     needs: params.needs,
     affect: params.affect,
-    evidenceNote: spec?.evidenceNote ?? "Keep the follow-up action simple, specific, and low-friction.",
-    toolHint: spec?.toolHint ?? "Offer a timer-based 5-minute fallback if the user is blocked.",
+    evidenceNote: spec.evidenceNote,
+    toolHint: spec.toolHint,
   };
 }
 
@@ -1981,7 +2289,7 @@ function buildPrompt(params: {
     ...(params.scienceInsight ? formatScienceInsight(params.scienceInsight) : []),
     "Output rules:",
     "- Send exactly one concise nudge with one immediate next action.",
-    "- Prefer low-risk, evidence-backed micro-interventions (movement, breathing, focus sprint, social friction).",
+    "- Prefer low-risk, evidence-backed micro-interventions (activation, regulation, focus, and friction design).",
     "- When possible, include one concrete tool move (timer, blocker, DND, checklist) that immediately starts the action.",
     "- For medication-related suggestions (e.g., smoking cessation meds), advise clinician guidance and avoid prescribing.",
     "- Do not mention internal scoring, models, or hidden policy.",
@@ -2003,7 +2311,10 @@ function buildPrompt(params: {
 function computeRelapsePressure(state: LifeCoachStateFile): number {
   const relevant = state.history
     .filter((entry) => {
-      if (entry.intervention !== "social-block" && entry.intervention !== "focus-sprint") {
+      const objectives = inferObjectivesFromInterventionId(entry.intervention);
+      const tracksSocialOrFocus =
+        objectives.includes("socialMediaReduction") || objectives.includes("focus");
+      if (!tracksSocialOrFocus) {
         return false;
       }
       return entry.status === "ignored" || entry.status === "rejected";
@@ -2152,9 +2463,17 @@ export async function createLifeCoachHeartbeatPlan(params: {
     };
   }
 
-  const activeInterventions = resolveActiveInterventions({
+  const allowSoraVisualization = lifeCoach.allowSoraVisualization ?? DEFAULT_ALLOW_SORA;
+  const generatedInterventions = buildDynamicInterventions({
+    messages,
+    needs,
+    affect,
+    allowSoraVisualization,
+    scienceInsight,
+  });
+  const activeInterventions = resolveActiveInterventions(generatedInterventions, {
     ...lifeCoach,
-    allowSoraVisualization: lifeCoach.allowSoraVisualization ?? DEFAULT_ALLOW_SORA,
+    allowSoraVisualization,
   });
   const decision = selectIntervention({
     activeInterventions,
@@ -2166,7 +2485,6 @@ export async function createLifeCoachHeartbeatPlan(params: {
     tone,
     relapsePressure,
     scienceInsight,
-    now,
   });
 
   state.updatedAt = now;
@@ -2179,7 +2497,11 @@ export async function createLifeCoachHeartbeatPlan(params: {
       affect,
       preferences: state.preferences,
       scienceInsight,
-      blockedReason: decision ? undefined : "no intervention cleared score threshold",
+      blockedReason: decision
+        ? undefined
+        : activeInterventions.length === 0
+          ? "intervention filters excluded all generated candidates"
+          : "no intervention cleared score threshold",
       actionContract,
     }),
     decision,
@@ -2210,7 +2532,7 @@ export async function recordLifeCoachDispatch(params: {
     await saveLifeCoachState(params.agentId, state);
     return;
   }
-  const stat = state.stats[params.decision.intervention];
+  const stat = ensureInterventionStat(state, params.decision.intervention);
   stat.sent += 1;
   state.history.push({
     id: `${params.decision.intervention}-${now}-${Math.round(Math.random() * 1e6)}`,

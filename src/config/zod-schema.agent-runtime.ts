@@ -43,32 +43,8 @@ export const HeartbeatSchema = z
           .optional(),
         interventions: z
           .object({
-            allow: z
-              .array(
-                z.union([
-                  z.literal("walk"),
-                  z.literal("social-block"),
-                  z.literal("focus-sprint"),
-                  z.literal("breathing"),
-                  z.literal("hydration"),
-                  z.literal("smoking-cessation"),
-                  z.literal("sora-visualization"),
-                ]),
-              )
-              .optional(),
-            deny: z
-              .array(
-                z.union([
-                  z.literal("walk"),
-                  z.literal("social-block"),
-                  z.literal("focus-sprint"),
-                  z.literal("breathing"),
-                  z.literal("hydration"),
-                  z.literal("smoking-cessation"),
-                  z.literal("sora-visualization"),
-                ]),
-              )
-              .optional(),
+            allow: z.array(z.string()).optional(),
+            deny: z.array(z.string()).optional(),
           })
           .strict()
           .optional(),

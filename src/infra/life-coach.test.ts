@@ -33,7 +33,7 @@ const SMOKING_TOPIC = {
   objectiveWeights: { stressRegulation: 0.2, focus: 0.1 },
   confidenceBias: 0.25,
   minConfidence: 0.35,
-  recommendedIntervention: "smoking-cessation",
+  recommendedIntervention: "dyn:stressRegulation:friction",
   trajectoryForecast:
     "If smoking remains daily, long-term cohort evidence suggests roughly 7-10 years lower life expectancy on average.",
   improvementForecast:
@@ -105,7 +105,7 @@ describe("life-coach", () => {
 
     expect(plan.prompt).toContain("[AUTOLIFE LIFECOACH]");
     expect(plan.decision).toBeDefined();
-    expect(plan.decision?.intervention).toBe("social-block");
+    expect(plan.decision?.intervention).toContain("dyn:");
     expect(plan.decision?.needs.socialMediaReduction).toBeGreaterThan(0.5);
     expect(plan.decision?.needs.focus).toBeGreaterThan(0.45);
   });
@@ -153,7 +153,7 @@ describe("life-coach", () => {
     expect(plan.prompt).toContain("https://pubmed.ncbi.nlm.nih.gov/27158893/");
   });
 
-  it("prioritizes smoking-cessation intervention when smoking risk confidence is high", async () => {
+  it("prioritizes science-recommended intervention when smoking risk confidence is high", async () => {
     await writeScienceCatalog({ dir: tmpDir, topics: [SMOKING_TOPIC] });
     const sessionFile = path.join(tmpDir, "session-smoking-priority.jsonl");
     await fs.writeFile(
@@ -190,7 +190,7 @@ describe("life-coach", () => {
     });
 
     expect(plan.decision).toBeDefined();
-    expect(plan.decision?.intervention).toBe("smoking-cessation");
+    expect(plan.decision?.intervention).toBe(SMOKING_TOPIC.recommendedIntervention);
     expect(plan.decision?.scienceInsight?.riskId).toBe("smoking");
   });
 
@@ -204,7 +204,7 @@ describe("life-coach", () => {
           objectiveWeights: { focus: 0.4, mood: 0.2 },
           confidenceBias: 0.2,
           minConfidence: 0.3,
-          recommendedIntervention: "focus-sprint",
+          recommendedIntervention: "dyn:focus:activation",
           trajectoryForecast: "If late-night gaming keeps expanding, next-day focus and sleep stability may decline.",
           improvementForecast:
             "Time-boxed gaming windows plus startup sprints can restore task initiation consistency.",
@@ -659,9 +659,7 @@ describe("life-coach", () => {
 
     expect(followUpPlan.decision?.phase).toBe("follow-up");
     expect(followUpPlan.decision?.action).toContain("ALL_DONE");
-    if (followUpPlan.decision?.intervention === "social-block") {
-      expect(followUpPlan.decision.action).toContain("STUCK_HELP");
-    }
+    expect(followUpPlan.decision?.action).toContain("STUCK_HELP");
   });
 
   it("computes relapse pressure from ignored/rejected social outcomes", () => {
@@ -672,21 +670,21 @@ describe("life-coach", () => {
         history: [
           {
             id: "a",
-            intervention: "social-block",
+            intervention: "dyn:socialMediaReduction:friction",
             sentAt: 1,
             status: "ignored",
             followUpMinutes: 30,
           },
           {
             id: "b",
-            intervention: "focus-sprint",
+            intervention: "dyn:focus:activation",
             sentAt: 2,
             status: "rejected",
             followUpMinutes: 30,
           },
           {
             id: "c",
-            intervention: "walk",
+            intervention: "dyn:movement:activation",
             sentAt: 3,
             status: "ignored",
             followUpMinutes: 30,
@@ -757,5 +755,326 @@ describe("life-coach", () => {
       sentAt + 70_000,
     );
     expect(state.stats[initialPlan.decision.intervention].rejected).toBeGreaterThanOrEqual(1);
+  });
+
+  it("enforces daily nudge cap and allows nudges again after a full day", async () => {
+    const config = {
+      enabled: true,
+      cooldownMinutes: 1,
+      maxNudgesPerDay: 2,
+    } as const;
+    const firstAt = 1_000_000;
+    const secondAt = firstAt + 2 * 60_000;
+    const cappedAt = secondAt + 2 * 60_000;
+    const nextDayAt = firstAt + 24 * 60 * 60_000 + 5 * 60_000;
+
+    const firstPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: config,
+      nowMs: firstAt,
+    });
+    expect(firstPlan.decision).toBeDefined();
+    if (!firstPlan.decision) {
+      return;
+    }
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: firstPlan.decision,
+      nowMs: firstAt,
+    });
+
+    const secondPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: config,
+      nowMs: secondAt,
+    });
+    expect(secondPlan.decision).toBeDefined();
+    if (!secondPlan.decision) {
+      return;
+    }
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: secondPlan.decision,
+      nowMs: secondAt,
+    });
+
+    const cappedPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: config,
+      nowMs: cappedAt,
+    });
+    expect(cappedPlan.decision).toBeUndefined();
+    expect(cappedPlan.prompt).toContain("daily nudge cap reached (2)");
+
+    const nextDayPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: config,
+      nowMs: nextDayAt,
+    });
+    expect(nextDayPlan.decision).toBeDefined();
+  });
+
+  it("falls back to dynamic science insights in hybrid mode when catalog data is missing", async () => {
+    const searchPayload = {
+      esearchresult: {
+        idlist: ["33333333", "44444444"],
+      },
+    };
+    const summaryPayload = {
+      result: {
+        "33333333": { uid: "33333333", title: "Behavior trial C", pubdate: "2020 Apr" },
+        "44444444": { uid: "44444444", title: "Behavior trial D", pubdate: "2022 Nov" },
+      },
+    };
+    const fetchMock = vi.fn().mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("esearch.fcgi")) {
+        return {
+          ok: true,
+          json: async () => searchPayload,
+        };
+      }
+      if (url.includes("esummary.fcgi")) {
+        return {
+          ok: true,
+          json: async () => summaryPayload,
+        };
+      }
+      return {
+        ok: false,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sessionFile = path.join(tmpDir, "session-hybrid-dynamic-fallback.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionLine({
+          role: "user",
+          text: "I keep doomscrolling, procrastinating, and cannot sustain focus",
+        }),
+        buildSessionLine({
+          role: "user",
+          text: "I need a behavior intervention plan that actually starts now",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: {
+        enabled: true,
+        science: {
+          enabled: true,
+          mode: "hybrid",
+          catalogFile: ".autolife/does-not-exist.json",
+        },
+      },
+    });
+
+    expect(plan.prompt).toContain("[AUTOLIFE SCIENCE]");
+    expect(plan.prompt).toContain("Detected risk:");
+    expect(plan.prompt).toContain("https://pubmed.ncbi.nlm.nih.gov/33333333/");
+    expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("keeps life-coach state isolated by agent id", async () => {
+    const initialAt = 2_000_000;
+    const laterAt = initialAt + 15 * 60_000;
+    const config = {
+      enabled: true,
+      cooldownMinutes: 120,
+    } as const;
+
+    const alphaInitial = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "alpha",
+      basePrompt: "Base prompt",
+      lifeCoach: config,
+      nowMs: initialAt,
+    });
+    expect(alphaInitial.decision).toBeDefined();
+    if (!alphaInitial.decision) {
+      return;
+    }
+    await recordLifeCoachDispatch({
+      agentId: "alpha",
+      decision: alphaInitial.decision,
+      nowMs: initialAt,
+    });
+
+    const alphaDuringCooldown = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "alpha",
+      basePrompt: "Base prompt",
+      lifeCoach: config,
+      nowMs: laterAt,
+    });
+    expect(alphaDuringCooldown.decision).toBeUndefined();
+    expect(alphaDuringCooldown.prompt).toContain("cooldown active");
+
+    const betaPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "beta",
+      basePrompt: "Base prompt",
+      lifeCoach: config,
+      nowMs: laterAt,
+    });
+    expect(betaPlan.decision).toBeDefined();
+  });
+
+  it("omits action-contract instructions when the action contract is disabled", async () => {
+    const sessionFile = path.join(tmpDir, "session-action-contract-disabled.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      buildSessionLine({
+        role: "user",
+        text: "I keep scrolling social media instead of doing deep work",
+      }),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: {
+        enabled: true,
+        actionContract: {
+          enabled: false,
+        },
+      },
+    });
+
+    expect(plan.decision).toBeDefined();
+    expect(plan.prompt).not.toContain("Action contract:");
+  });
+
+  it("does not schedule follow-up nudges for interventions already marked completed", async () => {
+    const initialAt = 3_000_000;
+    const initialPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: { enabled: true },
+      nowMs: initialAt,
+    });
+    expect(initialPlan.decision).toBeDefined();
+    if (!initialPlan.decision) {
+      return;
+    }
+
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: initialPlan.decision,
+      nowMs: initialAt,
+    });
+
+    const completionFile = path.join(tmpDir, "session-completed-before-followup.jsonl");
+    await fs.writeFile(
+      completionFile,
+      buildSessionLine({
+        role: "user",
+        text: "done, completed this and made progress",
+        timestamp: initialAt + 60_000,
+      }),
+      "utf-8",
+    );
+
+    await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: initialAt + 120_000,
+        sessionFile: completionFile,
+      },
+      lifeCoach: { enabled: true, cooldownMinutes: 1 },
+      nowMs: initialAt + 120_000,
+    });
+
+    const dueAt = initialAt + (initialPlan.decision.followUpMinutes + 2) * 60_000;
+    const duePlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: dueAt,
+        sessionFile: completionFile,
+      },
+      lifeCoach: { enabled: true, cooldownMinutes: 1 },
+      nowMs: dueAt,
+    });
+
+    expect(duePlan.decision?.phase).not.toBe("follow-up");
+    const statePath = path.join(tmpDir, "agents", "main", "life-coach-state.json");
+    const stateRaw = await fs.readFile(statePath, "utf-8");
+    const state = __lifeCoachTestUtils.normalizeStateFile(JSON.parse(stateRaw) as unknown, dueAt);
+    const completedEntry = state.history.find(
+      (entry) => entry.intervention === initialPlan.decision?.intervention && entry.status === "completed",
+    );
+    expect(completedEntry).toBeDefined();
+  });
+
+  it("rehydrates saved intervention affinity values from persisted state", () => {
+    const normalized = __lifeCoachTestUtils.normalizeStateFile(
+      {
+        version: 2,
+        updatedAt: 123,
+        history: [],
+        stats: {},
+        preferences: {
+          objectiveBias: {
+            mood: 0,
+            energy: 0,
+            focus: 0,
+            movement: 0,
+            socialMediaReduction: 0,
+            stressRegulation: 0,
+          },
+          interventionAffinity: {
+            "dyn:focus:activation": 0.7,
+            "dyn:movement:activation": -0.4,
+          },
+          supportiveToneBias: 0,
+          lastLearnedMessageTs: 100,
+        },
+      },
+      Date.now(),
+    );
+
+    expect(normalized.preferences.interventionAffinity["dyn:focus:activation"]).toBe(0.7);
+    expect(normalized.preferences.interventionAffinity["dyn:movement:activation"]).toBe(-0.4);
   });
 });

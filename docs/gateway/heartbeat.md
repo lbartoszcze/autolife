@@ -113,8 +113,8 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
             focus: 1.2,
           },
           interventions: {
-            // allow: ["walk", "social-block", "focus-sprint"],
-            // deny: ["sora-visualization"],
+            // allow: ["dyn:focus:activation", "dyn:socialMediaReduction:friction"],
+            // deny: ["dyn:mood:visualization"],
           },
         },
       },
@@ -229,7 +229,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `fetchTimeoutMs`: PubMed fetch timeout for dynamic mode.
     - `cacheHours`: dynamic evidence cache TTL.
   - `objectives`: weighted priorities for `mood`, `energy`, `focus`, `movement`, `socialMediaReduction`, `stressRegulation`.
-  - `interventions.allow` / `interventions.deny`: filter intervention types (`walk`, `social-block`, `focus-sprint`, `breathing`, `hydration`, `smoking-cessation`, `sora-visualization`).
+  - `interventions.allow` / `interventions.deny`: filter runtime-generated intervention IDs (for example: `dyn:focus:activation`, `dyn:socialMediaReduction:friction`, `dyn:stressRegulation:regulation`, `dyn:mood:visualization`).
 
 ## Life Coach Mode
 
@@ -269,7 +269,7 @@ Example catalog entry:
     "objectiveWeights": { "focus": 0.4, "mood": 0.2 },
     "confidenceBias": 0.15,
     "minConfidence": 0.3,
-    "recommendedIntervention": "focus-sprint",
+    "recommendedIntervention": "dyn:focus:activation",
     "trajectoryForecast": "If this pattern continues, next-day focus can degrade.",
     "improvementForecast": "Time-boxing gaming and adding a startup sprint can restore consistency.",
     "recommendedAction": "Set a hard cutoff and run one 20-minute focus sprint first.",

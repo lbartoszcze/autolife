@@ -26,14 +26,7 @@ export type LifeCoachObjective =
   | "socialMediaReduction"
   | "stressRegulation";
 
-export type LifeCoachInterventionId =
-  | "walk"
-  | "social-block"
-  | "focus-sprint"
-  | "breathing"
-  | "hydration"
-  | "smoking-cessation"
-  | "sora-visualization";
+export type LifeCoachInterventionId = string;
 
 export type HeartbeatLifeCoachConfig = {
   /** Enable dynamic habit interventions during heartbeat runs. */
