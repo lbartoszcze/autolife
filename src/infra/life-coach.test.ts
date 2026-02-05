@@ -144,6 +144,79 @@ describe("life-coach", () => {
     expect(plan.decision?.scienceInsight?.riskId).toBe("smoking");
   });
 
+  it("loads custom science topics dynamically from workspace catalog", async () => {
+    const catalogPath = path.join(tmpDir, "SCIENCE_TOPICS.json");
+    await fs.writeFile(
+      catalogPath,
+      JSON.stringify(
+        [
+          {
+            id: "gaming-binge",
+            keywords: ["gaming", "league", "ranked"],
+            objectiveWeights: { focus: 0.4, mood: 0.2 },
+            confidenceBias: 0.2,
+            minConfidence: 0.3,
+            recommendedIntervention: "focus-sprint",
+            trajectoryForecast: "If late-night gaming keeps expanding, next-day focus and sleep stability may decline.",
+            improvementForecast:
+              "Time-boxed gaming windows plus startup sprints can restore task initiation consistency.",
+            recommendedAction:
+              "Set a hard gaming cutoff tonight and run one 20-minute focus sprint before opening games.",
+            references: [
+              {
+                title: "Sample behavior trial",
+                url: "https://example.org/gaming-study",
+              },
+            ],
+            forceInterventionAtConfidence: 0.5,
+          },
+        ],
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const sessionFile = path.join(tmpDir, "session-custom-science.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionLine({
+          role: "user",
+          text: "I keep gaming ranked at night and can't focus in the morning",
+        }),
+        buildSessionLine({
+          role: "user",
+          text: "league queue gets me stuck and procrastinating",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: { enabled: true },
+    });
+
+    expect(plan.decision).toBeDefined();
+    expect(plan.decision?.scienceInsight?.riskId).toBe("gaming-binge");
+    expect(plan.prompt).toContain("Detected risk: gaming-binge");
+    expect(plan.prompt).toContain("https://example.org/gaming-study");
+  });
+
   it("respects cooldown between nudges", async () => {
     const nowMs = 100_000;
     const planA = await createLifeCoachHeartbeatPlan({

@@ -86,6 +86,14 @@ export const HeartbeatSchema = z
           })
           .strict()
           .optional(),
+        science: z
+          .object({
+            enabled: z.boolean().optional(),
+            catalogFile: z.string().optional(),
+            minConfidence: z.number().min(0).max(1).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

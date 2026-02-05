@@ -101,6 +101,11 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
             doneToken: "DONE",
             helpToken: "NEED_HELP",
           },
+          science: {
+            enabled: true,
+            // catalogFile: ".autolife/science-topics.json",
+            minConfidence: 0.4,
+          },
           objectives: {
             socialMediaReduction: 1.4,
             movement: 1.2,
@@ -214,6 +219,10 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `enabled`: toggle completion contract.
     - `doneToken`: completion token (default `DONE`).
     - `helpToken`: blocked token (default `NEED_HELP`).
+  - `science`: data-driven scientific forecasting and interventions.
+    - `enabled`: toggle science topic modeling (default `true`).
+    - `catalogFile`: optional path to a JSON topic catalog (relative to workspace or absolute).
+    - `minConfidence`: confidence threshold for surfacing a science insight.
   - `objectives`: weighted priorities for `mood`, `energy`, `focus`, `movement`, `socialMediaReduction`, `stressRegulation`.
   - `interventions.allow` / `interventions.deny`: filter intervention types (`walk`, `social-block`, `focus-sprint`, `breathing`, `hydration`, `smoking-cessation`, `sora-visualization`).
 
@@ -225,7 +234,7 @@ With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop 
 - estimate affect (frustration, distress, momentum) to adapt tone and intervention friction
 - learn user preference affinities from outcomes and user language ("this helped", "don't suggest this")
 - pick a best-fit intervention from a weighted policy
-- inject science-backed risk forecasts and paper links when relevant (for example, smoking or sedentary risk)
+- inject science-backed risk forecasts and paper links from a data catalog (not hardcoded topic logic)
 - send one clear, low-friction action
 - run timed follow-up check-ins
 - include intervention evidence notes and concrete execution hints (timer/blocker/DND/checklist)
@@ -234,6 +243,29 @@ With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop 
 
 Persistent adaptation state is stored under the OpenClaw state directory:
 `agents/<agent-id>/life-coach-state.json`.
+
+Science catalogs can be provided per workspace via `SCIENCE_TOPICS.json` or
+`.autolife/science-topics.json`, or via `lifeCoach.science.catalogFile`.
+
+Example catalog entry:
+
+```json
+[
+  {
+    "id": "late-night-gaming",
+    "keywords": ["gaming", "ranked", "late night"],
+    "objectiveWeights": { "focus": 0.4, "mood": 0.2 },
+    "confidenceBias": 0.15,
+    "minConfidence": 0.3,
+    "recommendedIntervention": "focus-sprint",
+    "trajectoryForecast": "If this pattern continues, next-day focus can degrade.",
+    "improvementForecast": "Time-boxing gaming and adding a startup sprint can restore consistency.",
+    "recommendedAction": "Set a hard cutoff and run one 20-minute focus sprint first.",
+    "references": [{ "title": "Study title", "url": "https://example.org/paper" }],
+    "forceInterventionAtConfidence": 0.55
+  }
+]
+```
 
 ## Delivery behavior
 

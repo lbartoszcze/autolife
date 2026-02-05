@@ -9,6 +9,7 @@ import type {
   LifeCoachInterventionId,
   LifeCoachObjective,
 } from "../config/types.agent-defaults.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 type TranscriptRole = "user" | "assistant";
@@ -27,21 +28,35 @@ type LifeCoachAffectScores = {
   momentum: number;
 };
 
-type ScienceRiskId = "smoking" | "sedentary" | "social-media-overuse" | "stress-load";
-
 type ScienceReference = {
   title: string;
   url: string;
 };
 
+type ScienceTopicSpec = {
+  id: string;
+  keywords: string[];
+  objectiveWeights?: Partial<Record<LifeCoachObjective, number>>;
+  affectWeights?: Partial<Record<keyof LifeCoachAffectScores, number>>;
+  confidenceBias?: number;
+  minConfidence?: number;
+  recommendedIntervention: LifeCoachInterventionId;
+  trajectoryForecast: string;
+  improvementForecast: string;
+  recommendedAction: string;
+  references?: ScienceReference[];
+  forceInterventionAtConfidence?: number;
+};
+
 type ScienceInsight = {
-  riskId: ScienceRiskId;
+  riskId: string;
   confidence: number;
   trajectoryForecast: string;
   improvementForecast: string;
   recommendedAction: string;
   recommendedIntervention: LifeCoachInterventionId;
   references: ScienceReference[];
+  forceIntervention: boolean;
 };
 
 type LifeCoachStats = Record<
@@ -121,6 +136,7 @@ const DEFAULT_MAX_NUDGES_PER_DAY = 6;
 const DEFAULT_ALLOW_SORA = true;
 const DEFAULT_DONE_TOKEN = "DONE";
 const DEFAULT_HELP_TOKEN = "NEED_HELP";
+const DEFAULT_SCIENCE_MIN_CONFIDENCE = 0.35;
 
 const DEFAULT_OBJECTIVES: Record<LifeCoachObjective, number> = {
   mood: 1,
@@ -200,18 +216,6 @@ const SOCIAL_URGE_HINTS = [
   "scrolling",
 ];
 const MOVEMENT_HINTS = ["walk", "outside", "steps", "exercise", "workout", "run"];
-const SMOKING_HINTS = [
-  "smoke",
-  "smoking",
-  "cigarette",
-  "cigarettes",
-  "nicotine",
-  "vape",
-  "vaping",
-  "tobacco",
-];
-const SEDENTARY_HINTS = ["sitting", "sedentary", "all day desk", "didn't move", "no exercise"];
-const SLEEP_DEBT_HINTS = ["sleep deprived", "slept 4", "slept 5", "insomnia", "barely slept"];
 
 const FRUSTRATION_HINTS = [
   "frustrated",
@@ -244,40 +248,104 @@ const OBJECTIVE_KEYWORDS: Record<LifeCoachObjective, string[]> = {
   stressRegulation: ["stress", "anxious", "panic", "calm", "overwhelmed"],
 };
 
-const SCIENCE_REFERENCES: Record<ScienceRiskId, ScienceReference[]> = {
-  smoking: [
-    {
-      title: "Jha et al. (2013) 21st-Century Hazards of Smoking and Benefits of Cessation",
-      url: "https://pubmed.ncbi.nlm.nih.gov/23343063/",
-    },
-    {
-      title: "Cahill et al. (2016) Nicotine receptor partial agonists for smoking cessation",
-      url: "https://pubmed.ncbi.nlm.nih.gov/27158893/",
-    },
-  ],
-  sedentary: [
-    {
-      title: "Ekelund et al. (2016) Physical activity attenuates sitting-related mortality risk",
-      url: "https://pubmed.ncbi.nlm.nih.gov/27475271/",
-    },
-  ],
-  "social-media-overuse": [
-    {
-      title: "Brailovskaia et al. (2022) One-week social media abstinence RCT",
-      url: "https://pubmed.ncbi.nlm.nih.gov/35512731/",
-    },
-    {
-      title: "Brailovskaia et al. (2026) Meta-analysis: reducing social media use and depressive symptoms",
-      url: "https://pubmed.ncbi.nlm.nih.gov/41294782/",
-    },
-  ],
-  "stress-load": [
-    {
-      title: "Fincham et al. (2023) Breathwork improves stress and mental health (meta-analysis)",
-      url: "https://pubmed.ncbi.nlm.nih.gov/36624160/",
-    },
-  ],
-};
+const DEFAULT_SCIENCE_TOPICS: ScienceTopicSpec[] = [
+  {
+    id: "smoking",
+    keywords: ["smoke", "smoking", "cigarette", "cigarettes", "nicotine", "vape", "vaping", "tobacco"],
+    objectiveWeights: { stressRegulation: 0.2, focus: 0.1 },
+    confidenceBias: 0.25,
+    minConfidence: 0.35,
+    recommendedIntervention: "smoking-cessation",
+    trajectoryForecast:
+      "If smoking remains daily, long-term cohort evidence suggests roughly 7-10 years lower life expectancy on average.",
+    improvementForecast:
+      "If you start a structured quit plan now, cessation probability increases substantially and long-term excess mortality drops over time.",
+    recommendedAction:
+      "Set a quit date in the next 7 days, remove smoking cues today, and ask a clinician about first-line cessation medication plus support.",
+    references: [
+      {
+        title: "Jha et al. (2013) 21st-Century Hazards of Smoking and Benefits of Cessation",
+        url: "https://pubmed.ncbi.nlm.nih.gov/23343063/",
+      },
+      {
+        title: "Cahill et al. (2016) Nicotine receptor partial agonists for smoking cessation",
+        url: "https://pubmed.ncbi.nlm.nih.gov/27158893/",
+      },
+    ],
+    forceInterventionAtConfidence: 0.55,
+  },
+  {
+    id: "sedentary",
+    keywords: ["sitting", "sedentary", "all day desk", "didn't move", "no exercise"],
+    objectiveWeights: { movement: 0.45 },
+    minConfidence: 0.4,
+    recommendedIntervention: "walk",
+    trajectoryForecast:
+      "Sustained high sitting with low activity predicts higher all-cause mortality risk over the coming years.",
+    improvementForecast:
+      "Adding daily moderate activity can materially attenuate or offset sitting-related mortality risk.",
+    recommendedAction:
+      "Start a daily movement floor now: one 20-minute walk plus a 2-minute movement break each hour.",
+    references: [
+      {
+        title: "Ekelund et al. (2016) Physical activity attenuates sitting-related mortality risk",
+        url: "https://pubmed.ncbi.nlm.nih.gov/27475271/",
+      },
+    ],
+  },
+  {
+    id: "social-media-overuse",
+    keywords: ["social media", "instagram", "tiktok", "twitter", "x.com", "shorts", "doomscroll", "scrolling"],
+    objectiveWeights: { socialMediaReduction: 0.45, focus: 0.1 },
+    minConfidence: 0.45,
+    recommendedIntervention: "social-block",
+    trajectoryForecast:
+      "If compulsive social use persists, odds of low mood and attention fragmentation remain elevated.",
+    improvementForecast:
+      "A short abstinence or strict reduction period can improve well-being and reduce depressive symptoms.",
+    recommendedAction:
+      "Run a 7-day social-media reduction protocol starting now: app blocker windows + one offline replacement activity per urge spike.",
+    references: [
+      {
+        title: "Brailovskaia et al. (2022) One-week social media abstinence RCT",
+        url: "https://pubmed.ncbi.nlm.nih.gov/35512731/",
+      },
+      {
+        title: "Brailovskaia et al. (2026) Meta-analysis: reducing social media use and depressive symptoms",
+        url: "https://pubmed.ncbi.nlm.nih.gov/41294782/",
+      },
+    ],
+  },
+  {
+    id: "stress-load",
+    keywords: [
+      "stressed",
+      "overwhelmed",
+      "anxious",
+      "panic",
+      "burned out",
+      "sleep deprived",
+      "insomnia",
+      "barely slept",
+    ],
+    affectWeights: { distress: 0.35 },
+    objectiveWeights: { stressRegulation: 0.25, mood: 0.1 },
+    minConfidence: 0.45,
+    recommendedIntervention: "breathing",
+    trajectoryForecast:
+      "If high stress remains unregulated, sustained cognitive and emotional load can keep recovery and focus suppressed.",
+    improvementForecast:
+      "Brief daily breathwork can reduce stress and anxiety symptoms within weeks when practiced consistently.",
+    recommendedAction:
+      "Do a 5-minute breath protocol now (slow exhale bias), then repeat twice later today with reminders.",
+    references: [
+      {
+        title: "Fincham et al. (2023) Breathwork improves stress and mental health (meta-analysis)",
+        url: "https://pubmed.ncbi.nlm.nih.gov/36624160/",
+      },
+    ],
+  },
+];
 
 const INTERVENTIONS: InterventionSpec[] = [
   {
@@ -507,6 +575,198 @@ function countHintMatches(text: string, hints: string[]): number {
 
 function countMentions(messages: TranscriptMessage[], hints: string[]): number {
   return messages.reduce((acc, msg) => acc + countHintMatches(msg.text, hints), 0);
+}
+
+function normalizeKeywords(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const keywords = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return [...new Set(keywords)];
+}
+
+function normalizeScienceReferences(value: unknown): ScienceReference[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is { title?: unknown; url?: unknown } => Boolean(entry && typeof entry === "object"))
+    .map((entry) => {
+      const title = typeof entry.title === "string" ? entry.title.trim() : "";
+      const url = typeof entry.url === "string" ? entry.url.trim() : "";
+      return { title, url };
+    })
+    .filter((entry) => entry.title.length > 0 && entry.url.length > 0);
+}
+
+function normalizeLifeCoachObjectiveWeights(
+  value: unknown,
+): Partial<Record<LifeCoachObjective, number>> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const normalized: Partial<Record<LifeCoachObjective, number>> = {};
+  for (const objective of Object.keys(DEFAULT_OBJECTIVES) as LifeCoachObjective[]) {
+    const candidate = raw[objective];
+    if (typeof candidate !== "number") {
+      continue;
+    }
+    normalized[objective] = clamp01(candidate);
+  }
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
+function normalizeAffectWeights(
+  value: unknown,
+): Partial<Record<keyof LifeCoachAffectScores, number>> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const keys: Array<keyof LifeCoachAffectScores> = ["frustration", "distress", "momentum"];
+  const normalized: Partial<Record<keyof LifeCoachAffectScores, number>> = {};
+  for (const key of keys) {
+    const candidate = raw[key];
+    if (typeof candidate !== "number") {
+      continue;
+    }
+    normalized[key] = clamp01(candidate);
+  }
+  return Object.keys(normalized).length ? normalized : undefined;
+}
+
+function isInterventionId(value: string): value is LifeCoachInterventionId {
+  return Object.hasOwn(INTERVENTION_BY_ID, value);
+}
+
+function normalizeScienceTopic(
+  raw: unknown,
+  defaultMinConfidence: number,
+): ScienceTopicSpec | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const typed = raw as Record<string, unknown>;
+  const id = typeof typed.id === "string" ? typed.id.trim().toLowerCase() : "";
+  const recommendedInterventionRaw =
+    typeof typed.recommendedIntervention === "string"
+      ? typed.recommendedIntervention.trim().toLowerCase()
+      : "";
+  const trajectoryForecast =
+    typeof typed.trajectoryForecast === "string" ? typed.trajectoryForecast.trim() : "";
+  const improvementForecast =
+    typeof typed.improvementForecast === "string" ? typed.improvementForecast.trim() : "";
+  const recommendedAction =
+    typeof typed.recommendedAction === "string" ? typed.recommendedAction.trim() : "";
+  const keywords = normalizeKeywords(typed.keywords);
+  if (
+    !id ||
+    !recommendedInterventionRaw ||
+    !isInterventionId(recommendedInterventionRaw) ||
+    !trajectoryForecast ||
+    !improvementForecast ||
+    !recommendedAction ||
+    keywords.length === 0
+  ) {
+    return undefined;
+  }
+  const confidenceBias = typeof typed.confidenceBias === "number" ? typed.confidenceBias : undefined;
+  const minConfidence =
+    typeof typed.minConfidence === "number"
+      ? clamp01(typed.minConfidence)
+      : clamp01(defaultMinConfidence);
+  const forceInterventionAtConfidence =
+    typeof typed.forceInterventionAtConfidence === "number"
+      ? clamp01(typed.forceInterventionAtConfidence)
+      : undefined;
+  return {
+    id,
+    keywords,
+    objectiveWeights: normalizeLifeCoachObjectiveWeights(typed.objectiveWeights),
+    affectWeights: normalizeAffectWeights(typed.affectWeights),
+    confidenceBias: typeof confidenceBias === "number" ? confidenceBias : undefined,
+    minConfidence,
+    recommendedIntervention: recommendedInterventionRaw,
+    trajectoryForecast,
+    improvementForecast,
+    recommendedAction,
+    references: normalizeScienceReferences(typed.references),
+    forceInterventionAtConfidence,
+  };
+}
+
+function normalizeScienceTopics(raw: unknown, defaultMinConfidence: number): ScienceTopicSpec[] {
+  const entries = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as { topics?: unknown }).topics)
+      ? ((raw as { topics: unknown[] }).topics ?? [])
+      : [];
+  const normalized: ScienceTopicSpec[] = [];
+  for (const entry of entries) {
+    const topic = normalizeScienceTopic(entry, defaultMinConfidence);
+    if (topic) {
+      normalized.push(topic);
+    }
+  }
+  return normalized;
+}
+
+function mergeScienceTopics(base: ScienceTopicSpec[], override: ScienceTopicSpec[]): ScienceTopicSpec[] {
+  const merged = new Map<string, ScienceTopicSpec>();
+  for (const topic of base) {
+    merged.set(topic.id, topic);
+  }
+  for (const topic of override) {
+    merged.set(topic.id, topic);
+  }
+  return [...merged.values()];
+}
+
+async function loadScienceTopics(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  lifeCoach?: HeartbeatLifeCoachConfig;
+}): Promise<ScienceTopicSpec[]> {
+  const scienceCfg = params.lifeCoach?.science;
+  if (scienceCfg?.enabled === false) {
+    return [];
+  }
+  const defaultMinConfidence = clamp01(scienceCfg?.minConfidence ?? DEFAULT_SCIENCE_MIN_CONFIDENCE);
+  let topics = DEFAULT_SCIENCE_TOPICS.map((topic) => ({
+    ...topic,
+    minConfidence: clamp01(topic.minConfidence ?? defaultMinConfidence),
+    keywords: [...topic.keywords],
+    references: topic.references ? [...topic.references] : [],
+  }));
+
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const configuredPath = scienceCfg?.catalogFile?.trim();
+  const catalogCandidates = configuredPath
+    ? [path.isAbsolute(configuredPath) ? configuredPath : path.join(workspaceDir, configuredPath)]
+    : [
+        path.join(workspaceDir, "SCIENCE_TOPICS.json"),
+        path.join(workspaceDir, ".autolife", "science-topics.json"),
+      ];
+  for (const catalogPath of catalogCandidates) {
+    try {
+      const raw = await fs.readFile(catalogPath, "utf-8");
+      const parsed = JSON.parse(raw) as unknown;
+      const customTopics = normalizeScienceTopics(parsed, defaultMinConfidence);
+      if (customTopics.length > 0) {
+        topics = mergeScienceTopics(topics, customTopics);
+      }
+      if (configuredPath) {
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return topics;
 }
 
 function extractTextFromContent(content: unknown): string {
@@ -968,80 +1228,51 @@ function deriveScienceInsight(params: {
   messages: TranscriptMessage[];
   needs: LifeCoachNeedScores;
   affect: LifeCoachAffectScores;
+  topics: ScienceTopicSpec[];
+  minConfidence: number;
 }): ScienceInsight | undefined {
   const recentUsers = params.messages.filter((msg) => msg.role === "user").slice(-24);
-  if (recentUsers.length === 0) {
+  if (recentUsers.length === 0 || params.topics.length === 0) {
     return undefined;
   }
-  const denom = Math.max(1, recentUsers.length);
-  const smokingHits = countMentions(recentUsers, SMOKING_HINTS);
-  const sedentaryHits = countMentions(recentUsers, SEDENTARY_HINTS);
-  const socialHits = countMentions(recentUsers, SOCIAL_URGE_HINTS);
-  const stressHits = countMentions(recentUsers, STRESS_HINTS);
-  const sleepDebtHits = countMentions(recentUsers, SLEEP_DEBT_HINTS);
-
-  const smokingConfidence = clamp01(smokingHits / denom + 0.25);
-  const sedentaryConfidence = clamp01(sedentaryHits / denom + params.needs.movement * 0.45);
-  const socialConfidence = clamp01(socialHits / (denom * 1.2) + params.needs.socialMediaReduction * 0.45);
-  const stressConfidence = clamp01(
-    (stressHits + sleepDebtHits * 0.7) / (denom * 1.3) + params.affect.distress * 0.35,
-  );
-
+  const denom = Math.max(1, recentUsers.length * 1.2);
   const candidates: ScienceInsight[] = [];
-  if (smokingConfidence >= 0.35) {
+  for (const topic of params.topics) {
+    const keywordHits = countMentions(recentUsers, topic.keywords);
+    const keywordSignal = keywordHits / denom;
+    let objectiveSignal = 0;
+    if (topic.objectiveWeights) {
+      for (const [objective, weight] of Object.entries(topic.objectiveWeights) as Array<
+        [LifeCoachObjective, number]
+      >) {
+        objectiveSignal += (params.needs[objective] ?? 0) * clamp01(weight);
+      }
+    }
+    let affectSignal = 0;
+    if (topic.affectWeights) {
+      for (const [key, weight] of Object.entries(topic.affectWeights) as Array<
+        [keyof LifeCoachAffectScores, number]
+      >) {
+        affectSignal += (params.affect[key] ?? 0) * clamp01(weight);
+      }
+    }
+    const confidence = clamp01(keywordSignal + objectiveSignal + affectSignal + (topic.confidenceBias ?? 0));
+    const threshold = clamp01(topic.minConfidence ?? params.minConfidence);
+    if (confidence < threshold) {
+      continue;
+    }
     candidates.push({
-      riskId: "smoking",
-      confidence: round2(smokingConfidence),
-      trajectoryForecast:
-        "If smoking remains daily, long-term cohort evidence suggests roughly 7-10 years lower life expectancy on average.",
-      improvementForecast:
-        "If you start a structured quit plan now, cessation probability increases substantially and long-term excess mortality drops over time.",
-      recommendedAction:
-        "Set a quit date in the next 7 days, remove smoking cues today, and ask a clinician about first-line cessation medication plus support.",
-      recommendedIntervention: "smoking-cessation",
-      references: SCIENCE_REFERENCES.smoking,
-    });
-  }
-  if (sedentaryConfidence >= 0.4) {
-    candidates.push({
-      riskId: "sedentary",
-      confidence: round2(sedentaryConfidence),
-      trajectoryForecast:
-        "Sustained high sitting with low activity predicts higher all-cause mortality risk over the coming years.",
-      improvementForecast:
-        "Adding daily moderate activity can materially attenuate or offset sitting-related mortality risk.",
-      recommendedAction:
-        "Start a daily movement floor now: one 20-minute walk plus a 2-minute movement break each hour.",
-      recommendedIntervention: "walk",
-      references: SCIENCE_REFERENCES.sedentary,
-    });
-  }
-  if (socialConfidence >= 0.45) {
-    candidates.push({
-      riskId: "social-media-overuse",
-      confidence: round2(socialConfidence),
-      trajectoryForecast:
-        "If compulsive social use persists, odds of low mood and attention fragmentation remain elevated.",
-      improvementForecast:
-        "A short abstinence or strict reduction period can improve well-being and reduce depressive symptoms.",
-      recommendedAction:
-        "Run a 7-day social-media reduction protocol starting now: app blocker windows + one offline replacement activity per urge spike.",
-      recommendedIntervention: "social-block",
-      references: SCIENCE_REFERENCES["social-media-overuse"],
-    });
-  }
-  if (stressConfidence >= 0.45) {
-    candidates.push({
-      riskId: "stress-load",
-      confidence: round2(stressConfidence),
-      trajectoryForecast:
-        "If high stress remains unregulated, sustained cognitive and emotional load can keep recovery and focus suppressed.",
-      improvementForecast:
-        "Brief daily breathwork can reduce stress and anxiety symptoms within weeks when practiced consistently.",
-      recommendedAction:
-        "Do a 5-minute breath protocol now (slow exhale bias), then repeat twice later today with reminders.",
-      recommendedIntervention: "breathing",
-      references: SCIENCE_REFERENCES["stress-load"],
+      riskId: topic.id,
+      confidence: round2(confidence),
+      trajectoryForecast: topic.trajectoryForecast,
+      improvementForecast: topic.improvementForecast,
+      recommendedAction: topic.recommendedAction,
+      recommendedIntervention: topic.recommendedIntervention,
+      references: topic.references ?? [],
+      forceIntervention:
+        typeof topic.forceInterventionAtConfidence === "number"
+          ? confidence >= clamp01(topic.forceInterventionAtConfidence)
+          : false,
     });
   }
 
@@ -1353,26 +1584,24 @@ function selectIntervention(params: {
   scienceInsight?: ScienceInsight;
   now: number;
 }): LifeCoachDecision | undefined {
-  if (
-    params.scienceInsight?.riskId === "smoking" &&
-    params.scienceInsight.confidence >= 0.55
-  ) {
-    const smokingSpec = params.activeInterventions.find((spec) => spec.id === "smoking-cessation");
-    if (smokingSpec) {
+  if (params.scienceInsight?.forceIntervention) {
+    const prioritySpec = params.activeInterventions.find(
+      (spec) => spec.id === params.scienceInsight?.recommendedIntervention,
+    );
+    if (prioritySpec) {
       return {
         phase: "initial",
-        intervention: smokingSpec.id,
+        intervention: prioritySpec.id,
         score: round2(0.75 + params.scienceInsight.confidence * 0.2),
-        rationale:
-          `science-priority override for smoking risk (confidence=${params.scienceInsight.confidence})`,
-        action: smokingSpec.action({ needs: params.needs, tone: params.tone }),
-        fallback: smokingSpec.fallback,
-        followUpMinutes: adjustFollowUpMinutes(smokingSpec.followUpMinutes, params.affect),
+        rationale: `science-priority override for ${params.scienceInsight.riskId}`,
+        action: prioritySpec.action({ needs: params.needs, tone: params.tone }),
+        fallback: prioritySpec.fallback,
+        followUpMinutes: adjustFollowUpMinutes(prioritySpec.followUpMinutes, params.affect),
         tone: params.tone,
         needs: params.needs,
         affect: params.affect,
-        evidenceNote: smokingSpec.evidenceNote,
-        toolHint: smokingSpec.toolHint,
+        evidenceNote: prioritySpec.evidenceNote,
+        toolHint: prioritySpec.toolHint,
         scienceInsight: params.scienceInsight,
       };
     }
@@ -1425,8 +1654,7 @@ function selectIntervention(params: {
         : 0;
     const scienceBoost =
       params.scienceInsight?.recommendedIntervention === spec.id
-        ? params.scienceInsight.confidence * 0.32 +
-          (params.scienceInsight.riskId === "smoking" && spec.id === "smoking-cessation" ? 0.2 : 0)
+        ? params.scienceInsight.confidence * 0.32 + (params.scienceInsight.forceIntervention ? 0.12 : 0)
         : 0;
     const score =
       expectedGain * (0.6 + completionProb) -
@@ -1526,6 +1754,7 @@ function formatScienceInsight(scienceInsight: ScienceInsight): string[] {
   return [
     "[AUTOLIFE SCIENCE]",
     `Detected risk: ${scienceInsight.riskId} (confidence=${scienceInsight.confidence}).`,
+    `Recommended intervention: ${scienceInsight.recommendedIntervention}.`,
     `Trajectory forecast: ${scienceInsight.trajectoryForecast}`,
     `Improvement forecast: ${scienceInsight.improvementForecast}`,
     `Evidence-backed action now: ${scienceInsight.recommendedAction}`,
@@ -1662,10 +1891,17 @@ export async function createLifeCoachHeartbeatPlan(params: {
     preferences: state.preferences,
   });
   const relapsePressure = computeRelapsePressure(state);
+  const scienceTopics = await loadScienceTopics({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    lifeCoach,
+  });
   const scienceInsight = deriveScienceInsight({
     messages,
     needs,
     affect,
+    topics: scienceTopics,
+    minConfidence: clamp01(lifeCoach?.science?.minConfidence ?? DEFAULT_SCIENCE_MIN_CONFIDENCE),
   });
 
   const dueFollowUp = findDueFollowUp(state, now);

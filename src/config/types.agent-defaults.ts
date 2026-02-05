@@ -62,6 +62,18 @@ export type HeartbeatLifeCoachConfig = {
     doneToken?: string;
     helpToken?: string;
   };
+  /** Science-backed risk modeling and intervention forecasting. */
+  science?: {
+    /** Enable science topic forecasting (default: true). */
+    enabled?: boolean;
+    /**
+     * Optional JSON catalog file path for custom science topics.
+     * Absolute paths are used directly; relative paths resolve from the agent workspace.
+     */
+    catalogFile?: string;
+    /** Minimum confidence threshold for surfacing a science insight (default: 0.35). */
+    minConfidence?: number;
+  };
 };
 
 export type AgentModelListConfig = {
