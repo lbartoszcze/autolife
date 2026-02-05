@@ -1,6 +1,6 @@
 # Stream Boundaries
 
-Each stream owns a strict area to avoid merge conflicts.
+Each stream owns a strict area to avoid merge conflicts and to keep responsibilities composable.
 
 ## Preference Agent
 
@@ -10,10 +10,16 @@ Each stream owns a strict area to avoid merge conflicts.
   - `src/agents/preferences/**`
   - `src/infra/life-coach-extractors.ts` (preference functions only)
   - `src/agents/preferences/*.test.ts`
+- Build:
+  - dynamic preference inference and learning only
 - Must deliver:
-  - dynamic objective inference from user text
-  - preference learning from outcomes
-  - explicit confidence + recency handling
+  - infer objective weights from user language
+  - update intervention affinity from outcome feedback
+  - apply recency decay
+  - return `UserPreferenceProfile`
+- Do not:
+  - hardcode objective lists
+  - hardcode intervention categories
 
 ## State Agent
 
@@ -23,10 +29,15 @@ Each stream owns a strict area to avoid merge conflicts.
   - `src/agents/state/**`
   - `src/infra/life-coach-extractors.ts` (state functions only)
   - `src/agents/state/*.test.ts`
+- Build:
+  - current-state and data-source ingestion layer
 - Must deliver:
-  - current-state extraction (affect + needs)
-  - input adapters for transcript and future telemetry
-  - quality scores for freshness and completeness
+  - `DataSourcesModel` transcript adapter first
+  - extensible hooks for calendar, wearables, app usage, and location
+  - computed needs, affect, freshness, and completeness
+  - return `CurrentStateAssessment`
+- Do not:
+  - choose interventions
 
 ## Evidence Agent
 
@@ -36,10 +47,14 @@ Each stream owns a strict area to avoid merge conflicts.
   - `src/agents/evidence/**`
   - `src/infra/life-coach.ts` (science lookup sections only)
   - `src/agents/evidence/*.test.ts`
+- Build:
+  - scientific evidence retrieval, scoring, and citation pipeline
 - Must deliver:
-  - dynamic evidence retrieval pipeline
-  - citation object model with source links
-  - confidence scoring and deduplication
+  - fetch papers and guidelines dynamically by topic
+  - rank confidence and deduplicate evidence
+  - produce `EvidenceFinding` with real source links
+- Do not:
+  - use static local intervention catalogs as decision source of truth
 
 ## Forecast Agent
 
@@ -48,10 +63,14 @@ Each stream owns a strict area to avoid merge conflicts.
 - Owns:
   - `src/agents/forecast/**`
   - `src/agents/forecast/*.test.ts`
+- Build:
+  - future trajectory model
 - Must deliver:
-  - baseline trajectory prediction
-  - intervention-adjusted counterfactual prediction
-  - transparent assumptions in structured output
+  - baseline and intervention-adjusted forecasts
+  - explicit assumptions, confidence, and horizon
+  - return `Forecast`
+- Do not:
+  - output prescriptive nudges directly
 
 ## Intervention Agent
 
@@ -61,10 +80,15 @@ Each stream owns a strict area to avoid merge conflicts.
   - `src/agents/interventions/**`
   - `src/infra/life-coach.ts` (intervention synthesis sections only)
   - `src/agents/interventions/*.test.ts`
+- Build:
+  - dynamic intervention synthesis and ranking
 - Must deliver:
-  - dynamic intervention generation (no hardcoded objective/strategy lists)
-  - ranking by user state + preference + evidence
-  - action plan payload with measurable step
+  - generate candidate actions from state, preferences, evidence, and forecast
+  - rank by expected impact, effort, and risk
+  - return `InterventionPlan` with measurable action and follow-up window
+- Do not:
+  - hardcode fixed strategy families
+  - hardcode objective enums
 
 ## Orchestrator
 
@@ -74,10 +98,17 @@ Each stream owns a strict area to avoid merge conflicts.
   - `src/orchestrator/**`
   - `src/infra/life-coach.ts` (top-level orchestration only)
   - `scripts/run-intervention.ts`
+- Build:
+  - end-to-end decision engine
 - Must deliver:
-  - execution graph across agents
-  - arbitration, cooldown, and safety gating
-  - deterministic trace for each decision
+  - call all agents
+  - arbitrate conflicts
+  - enforce cooldown, safety, and pacing
+  - log deterministic trace
+  - output `OrchestratorDecision`
+  - integrate CLI runner
+- Do not:
+  - duplicate agent internals
 
 ## QA
 
@@ -87,13 +118,19 @@ Each stream owns a strict area to avoid merge conflicts.
   - `src/**/*.test.ts`
   - `tests/**`
   - `coordination/evals/**`
+- Build:
+  - quality gate and eval harness
 - Must deliver:
-  - regression suite for end-to-end decision quality
-  - adversarial tests for bad nudges and unsafe recommendations
-  - merge-gate checklist for integrator
+  - unit, integration, and adversarial tests for dynamic behavior
+  - citation presence checks
+  - forecast transparency checks
+  - unsafe recommendation blocking checks
+- Do not:
+  - change production logic outside test scaffolding
 
 ## Integrator Constraints
 
 - Only integrator edits `main` directly.
 - If two streams need the same file, split the file first before feature work.
 - If a shared type changes, update `coordination/contracts.md` in the same PR.
+- No hardcoded objective or strategy lists; dynamic inference only.
