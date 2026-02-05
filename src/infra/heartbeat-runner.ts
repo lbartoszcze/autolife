@@ -42,6 +42,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
+import { scheduleLifeCoachFollowUpWake } from "./life-coach-follow-up-wake.js";
 import { createLifeCoachHeartbeatPlan, recordLifeCoachDispatch } from "./life-coach.js";
 import {
   type HeartbeatRunResult,
@@ -196,6 +197,8 @@ type HeartbeatAgentState = {
   lastRunMs?: number;
   nextDueMs: number;
 };
+
+const LIFE_COACH_FOLLOW_UP_REASON_PREFIX = "life-coach-follow-up:";
 
 export type HeartbeatRunner = {
   stop: () => void;
@@ -839,6 +842,12 @@ export async function runHeartbeatOnce(opts: {
           decision: lifeCoachDecision,
           nowMs: startedAt,
         });
+        if (lifeCoachDecision.phase === "initial" && lifeCoachDecision.followUpMinutes > 0) {
+          scheduleLifeCoachFollowUpWake({
+            agentId,
+            followUpMinutes: lifeCoachDecision.followUpMinutes,
+          });
+        }
       } catch (err) {
         log.warn("heartbeat: failed to record life-coach dispatch", {
           error: formatErrorMessage(err),
@@ -1004,12 +1013,19 @@ export function startHeartbeatRunner(opts: {
     }
 
     const reason = params?.reason;
+    const targetedAgentId =
+      typeof reason === "string" && reason.startsWith(LIFE_COACH_FOLLOW_UP_REASON_PREFIX)
+        ? normalizeAgentId(reason.slice(LIFE_COACH_FOLLOW_UP_REASON_PREFIX.length))
+        : undefined;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
 
     for (const agent of state.agents.values()) {
+      if (targetedAgentId && agent.agentId !== targetedAgentId) {
+        continue;
+      }
       if (isInterval && now < agent.nextDueMs) {
         continue;
       }
