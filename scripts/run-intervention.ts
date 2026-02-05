@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { renderSoraPlanToVideo } from "../src/agents/video/local-renderer.js";
+import { renderWithSoraApi } from "../src/agents/video/sora-api-renderer.js";
 import { createWorkspaceAgentClients, runOrchestrator, type TranscriptMessage } from "../src/orchestrator/index.js";
 
 type RunOptions = {
@@ -11,6 +12,9 @@ type RunOptions = {
   stateDir?: string;
   traceFile?: string;
   videoOut?: string;
+  videoProvider: "auto" | "local" | "sora";
+  soraModel?: "sora-2" | "sora-2-pro";
+  soraSize?: string;
   renderVideo: boolean;
   cooldownMinutes?: number;
   maxNudgesPerDay?: number;
@@ -22,6 +26,7 @@ type LooseRecord = Record<string, unknown>;
 function parseArgs(argv: string[]): RunOptions {
   const opts: RunOptions = {
     agentId: "main",
+    videoProvider: "auto",
     renderVideo: true,
     record: false,
   };
@@ -46,6 +51,24 @@ function parseArgs(argv: string[]): RunOptions {
     }
     if (arg === "--video-out" && argv[index + 1]) {
       opts.videoOut = argv[++index];
+      continue;
+    }
+    if (arg === "--video-provider" && argv[index + 1]) {
+      const next = argv[++index]?.toLowerCase();
+      if (next === "auto" || next === "local" || next === "sora") {
+        opts.videoProvider = next;
+      }
+      continue;
+    }
+    if (arg === "--sora-model" && argv[index + 1]) {
+      const next = argv[++index]?.toLowerCase();
+      if (next === "sora-2" || next === "sora-2-pro") {
+        opts.soraModel = next;
+      }
+      continue;
+    }
+    if (arg === "--sora-size" && argv[index + 1]) {
+      opts.soraSize = argv[++index];
       continue;
     }
     if (arg === "--no-render-video") {
@@ -331,6 +354,10 @@ async function main(): Promise<void> {
   let renderedVideoPath: string | undefined;
   let renderedVideoScenes: number | undefined;
   let renderedVideoDuration: number | undefined;
+  let renderedVideoProvider: "local" | "sora" | undefined;
+  let soraVideoId: string | undefined;
+  let soraModelUsed: string | undefined;
+  let soraSizeUsed: string | undefined;
   let renderedVideoError: string | undefined;
 
   if (opts.renderVideo && decision.selected?.videoPlan) {
@@ -338,16 +365,39 @@ async function main(): Promise<void> {
       ? path.resolve(opts.stateDir, "videos")
       : path.resolve(process.cwd(), ".autlife", "videos");
     try {
-      const render = await renderSoraPlanToVideo({
-        plan: decision.selected.videoPlan,
-        traceId: decision.traceId,
-        outputFile: opts.videoOut ? path.resolve(opts.videoOut) : undefined,
-        outputDir: defaultOutputDir,
-      });
-      renderedVideoPath = render.outputFile;
-      renderedVideoScenes = render.sceneCount;
-      renderedVideoDuration = render.durationSeconds;
-      decision.selected.videoPlan.outputFile = render.outputFile;
+      const autoProvider = process.env.OPENAI_API_KEY ? "sora" : "local";
+      const provider = opts.videoProvider === "auto" ? autoProvider : opts.videoProvider;
+      if (provider === "sora") {
+        const render = await renderWithSoraApi({
+          plan: decision.selected.videoPlan,
+          traceId: decision.traceId,
+          outputFile: opts.videoOut ? path.resolve(opts.videoOut) : undefined,
+          outputDir: defaultOutputDir,
+          model: opts.soraModel,
+          size: opts.soraSize,
+        });
+        renderedVideoProvider = "sora";
+        renderedVideoPath = render.outputFile;
+        renderedVideoDuration = render.seconds;
+        soraVideoId = render.videoId;
+        soraModelUsed = render.model;
+        soraSizeUsed = render.size;
+        decision.selected.videoPlan.outputFile = render.outputFile;
+        decision.selected.videoPlan.jobId = render.videoId;
+        decision.selected.videoPlan.status = "queued";
+      } else {
+        const render = await renderSoraPlanToVideo({
+          plan: decision.selected.videoPlan,
+          traceId: decision.traceId,
+          outputFile: opts.videoOut ? path.resolve(opts.videoOut) : undefined,
+          outputDir: defaultOutputDir,
+        });
+        renderedVideoProvider = "local";
+        renderedVideoPath = render.outputFile;
+        renderedVideoScenes = render.sceneCount;
+        renderedVideoDuration = render.durationSeconds;
+        decision.selected.videoPlan.outputFile = render.outputFile;
+      }
     } catch (error) {
       renderedVideoError = error instanceof Error ? error.message : String(error);
     }
@@ -390,9 +440,13 @@ async function main(): Promise<void> {
   console.log(`sora_job_id=${sora.jobId ?? "n/a"}`);
   console.log(`sora_call_to_action=${sora.callToAction ?? "n/a"}`);
   console.log(`sora_prompt=${sora.prompt ?? "n/a"}`);
+  console.log(`video_provider=${renderedVideoProvider ?? "n/a"}`);
   console.log(`video_file=${renderedVideoPath ?? "n/a"}`);
   console.log(`video_scenes=${typeof renderedVideoScenes === "number" ? String(renderedVideoScenes) : "n/a"}`);
   console.log(`video_duration_seconds=${typeof renderedVideoDuration === "number" ? String(renderedVideoDuration) : "n/a"}`);
+  console.log(`sora_video_id=${soraVideoId ?? "n/a"}`);
+  console.log(`sora_model=${soraModelUsed ?? "n/a"}`);
+  console.log(`sora_size=${soraSizeUsed ?? "n/a"}`);
   console.log(`video_render_error=${renderedVideoError ?? "n/a"}`);
   console.log("--- trace ---");
   console.log(JSON.stringify(trace, null, 2));

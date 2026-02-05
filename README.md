@@ -20,6 +20,9 @@ Optional flags:
 - `--state-dir <path>`: state directory (stores orchestrator state/trace)
 - `--trace-file <path>`: custom trace JSONL output file
 - `--video-out <path>`: explicit output path for rendered demo video (`.mp4`)
+- `--video-provider <auto|local|sora>`: choose renderer (`auto` defaults to Sora if `OPENAI_API_KEY` exists, else local)
+- `--sora-model <sora-2|sora-2-pro>`: model for Sora API render
+- `--sora-size <WxH>`: Sora output size (example: `1280x720`)
 - `--no-render-video`: skip local mp4 rendering
 - `--cooldown-minutes <n>`: cooldown gate window
 - `--max-nudges-per-day <n>`: pacing gate limit
@@ -43,6 +46,7 @@ The CLI prints:
 - mentor comparison output (`mentor_figure`, `mentor_takeaway`, `mentor_links`)
 - Sora video brief output (`sora_status`, `sora_title`, `sora_prompt`, `sora_call_to_action`)
 - rendered local demo video output (`video_file`, `video_scenes`, `video_duration_seconds`)
+- when Sora API is used: `sora_video_id`, `sora_model`, `sora_size`
 - detected source coverage (`data_sources`)
 
 ## Architecture
@@ -84,6 +88,11 @@ AUTLIFE_DATA_SOURCES_FILE=/absolute/path/data-sources.json pnpm run:intervention
 
 - `AUTLIFE_ENABLE_SORA_PLAN=1` (default) includes a Sora video brief in every selected intervention.
 - `AUTLIFE_QUEUE_SORA=1` with `AUTLIFE_SORA_WEBHOOK_URL=https://...` sends the video plan to your render queue.
+- To render an actual Sora video file through OpenAI Video API, set `OPENAI_API_KEY` and run:
+
+```bash
+pnpm run:intervention -- --source /absolute/path/to/transcript.jsonl --video-provider sora --sora-model sora-2 --sora-size 1280x720
+```
 
 ## Parallel Codex Streams
 
