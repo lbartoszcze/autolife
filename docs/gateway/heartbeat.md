@@ -226,6 +226,7 @@ With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop 
 - send one clear, low-friction action
 - run timed follow-up check-ins
 - update completion/ignore/reject outcomes to adapt future nudges
+- apply relapse-pressure adjustments when repeated social/focus nudges are ignored or rejected
 
 Persistent adaptation state is stored under the OpenClaw state directory:
 `agents/<agent-id>/life-coach-state.json`.

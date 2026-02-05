@@ -249,4 +249,40 @@ describe("life-coach", () => {
     expect(plan.prompt).toContain('Action contract: ask user to reply exactly "ALL_DONE"');
     expect(plan.prompt).toContain('"STUCK_HELP"');
   });
+
+  it("computes relapse pressure from ignored/rejected social outcomes", () => {
+    const normalized = __lifeCoachTestUtils.normalizeStateFile(
+      {
+        version: 1,
+        updatedAt: Date.now(),
+        history: [
+          {
+            id: "a",
+            intervention: "social-block",
+            sentAt: 1,
+            status: "ignored",
+            followUpMinutes: 30,
+          },
+          {
+            id: "b",
+            intervention: "focus-sprint",
+            sentAt: 2,
+            status: "rejected",
+            followUpMinutes: 30,
+          },
+          {
+            id: "c",
+            intervention: "walk",
+            sentAt: 3,
+            status: "ignored",
+            followUpMinutes: 30,
+          },
+        ],
+      },
+      Date.now(),
+    );
+    const pressure = __lifeCoachTestUtils.computeRelapsePressure(normalized);
+    expect(pressure).toBeGreaterThan(0);
+    expect(pressure).toBeLessThanOrEqual(1);
+  });
 });

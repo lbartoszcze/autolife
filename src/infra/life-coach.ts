@@ -738,6 +738,7 @@ function selectIntervention(params: {
   objectives: Record<LifeCoachObjective, number>;
   state: LifeCoachStateFile;
   tone: ResolvedTone;
+  relapsePressure: number;
   now: number;
 }): LifeCoachDecision | undefined {
   let best:
@@ -763,10 +764,18 @@ function selectIntervention(params: {
     }
 
     const friction = spec.baseFriction + (params.needs.energy > 0.75 ? 0.08 : 0);
-    const score = expectedGain * (0.6 + completionProb) - friction - reactance * 0.35;
+    const relapseBoost =
+      params.relapsePressure > 0.45 && params.needs.socialMediaReduction > 0.6
+        ? spec.id === "walk" || spec.id === "breathing"
+          ? 0.12
+          : spec.id === "social-block"
+            ? 0.05
+            : 0
+        : 0;
+    const score = expectedGain * (0.6 + completionProb) - friction - reactance * 0.35 + relapseBoost;
     const rationale =
       `expectedGain=${round2(expectedGain)}, completion=${round2(completionProb)}, ` +
-      `friction=${round2(friction)}, reactance=${round2(reactance)}`;
+      `friction=${round2(friction)}, reactance=${round2(reactance)}, relapse=${round2(params.relapsePressure)}`;
 
     if (!best || score > best.score) {
       best = { spec, score, rationale };
@@ -866,6 +875,25 @@ function buildPrompt(params: {
   return lines.join("\n");
 }
 
+function computeRelapsePressure(state: LifeCoachStateFile): number {
+  const relevant = state.history
+    .filter((entry) => {
+      if (entry.intervention !== "social-block" && entry.intervention !== "focus-sprint") {
+        return false;
+      }
+      return entry.status === "ignored" || entry.status === "rejected";
+    })
+    .toReversed()
+    .slice(0, 6);
+  if (relevant.length === 0) {
+    return 0;
+  }
+  const rejectedCount = relevant.filter((entry) => entry.status === "rejected").length;
+  const ignoredCount = relevant.filter((entry) => entry.status === "ignored").length;
+  const weighted = rejectedCount * 1 + ignoredCount * 0.75;
+  return clamp01(weighted / 4);
+}
+
 export async function createLifeCoachHeartbeatPlan(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -888,6 +916,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
   const objectives = resolveObjectives(lifeCoach);
   const actionContract = resolveActionContract(lifeCoach);
   const tone = resolveTone(lifeCoach, needs);
+  const relapsePressure = computeRelapsePressure(state);
 
   const dueFollowUp = findDueFollowUp(state, now);
   if (dueFollowUp) {
@@ -951,6 +980,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
     objectives,
     state,
     tone,
+    relapsePressure,
     now,
   });
 
@@ -1013,4 +1043,5 @@ export const __lifeCoachTestUtils = {
   resolveActiveInterventions,
   selectIntervention,
   normalizeStateFile,
+  computeRelapsePressure,
 };
