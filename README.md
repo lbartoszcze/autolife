@@ -25,3 +25,14 @@ Input format:
 - JSONL with entries containing `role` + `text`
 - or OpenAI-style `type: "message"` lines with `message.role` and text content
 - plain text files are treated as user messages
+
+## Parallel Codex Streams
+
+Create all stream worktrees in one command:
+
+```bash
+./scripts/setup-worktrees.sh
+```
+
+Coordination docs for parallel execution live in `coordination/README.md`.
+
