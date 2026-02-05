@@ -224,3 +224,16 @@ export function synthesizeInterventions(input: InterventionSynthesisInput): Rank
 export function selectInterventionPlan(input: InterventionSynthesisInput): InterventionPlan | undefined {
   return synthesizeInterventionPlan(input).selected;
 }
+
+export function buildInterventionPlan(input: InterventionSynthesisInput): {
+  selected: InterventionPlan;
+  alternatives: InterventionPlan[];
+  ranked: RankedIntervention[];
+} {
+  const result = synthesizeInterventionPlan(input);
+  return {
+    selected: result.selected,
+    alternatives: result.alternatives,
+    ranked: result.ranked,
+  };
+}
