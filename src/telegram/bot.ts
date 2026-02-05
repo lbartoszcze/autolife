@@ -444,11 +444,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
         : undefined;
       const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+      // For forum topics, provide the base group as parentPeer for binding inheritance.
+      const parentPeer =
+        isGroup && resolvedThreadId != null
+          ? { kind: "group" as const, id: String(chatId) }
+          : undefined;
       const route = resolveAgentRoute({
         cfg,
         channel: "telegram",
         accountId: account.accountId,
         peer: { kind: isGroup ? "group" : "dm", id: peerId },
+        parentPeer,
       });
       const sessionKey = route.sessionKey;
 

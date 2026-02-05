@@ -469,6 +469,11 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
+          // For forum topics, provide the base group as parentPeer for binding inheritance.
+          const parentPeer =
+            isGroup && resolvedThreadId != null
+              ? { kind: "group" as const, id: String(chatId) }
+              : undefined;
           const route = resolveAgentRoute({
             cfg,
             channel: "telegram",
@@ -477,6 +482,7 @@ export const registerTelegramNativeCommands = ({
               kind: isGroup ? "group" : "dm",
               id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
             },
+            parentPeer,
           });
           const baseSessionKey = route.sessionKey;
           // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)

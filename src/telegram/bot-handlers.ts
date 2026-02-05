@@ -149,6 +149,11 @@ export const registerTelegramHandlers = ({
     const peerId = params.isGroup
       ? buildTelegramGroupPeerId(params.chatId, resolvedThreadId)
       : String(params.chatId);
+    // For forum topics, provide the base group as parentPeer for binding inheritance.
+    const parentPeer =
+      params.isGroup && resolvedThreadId != null
+        ? { kind: "group" as const, id: String(params.chatId) }
+        : undefined;
     const route = resolveAgentRoute({
       cfg,
       channel: "telegram",
@@ -157,6 +162,7 @@ export const registerTelegramHandlers = ({
         kind: params.isGroup ? "group" : "dm",
         id: peerId,
       },
+      parentPeer,
     });
     const baseSessionKey = route.sessionKey;
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;

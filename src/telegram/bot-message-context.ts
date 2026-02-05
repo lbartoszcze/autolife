@@ -161,6 +161,12 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+  // For forum topics, provide the base group as parentPeer so bindings for the group
+  // apply to all topics within it (binding inheritance).
+  const parentPeer =
+    isGroup && resolvedThreadId != null
+      ? { kind: "group" as const, id: String(chatId) }
+      : undefined;
   const route = resolveAgentRoute({
     cfg,
     channel: "telegram",
@@ -169,6 +175,7 @@ export const buildTelegramMessageContext = async ({
       kind: isGroup ? "group" : "dm",
       id: peerId,
     },
+    parentPeer,
   });
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
