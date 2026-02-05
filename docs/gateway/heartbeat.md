@@ -90,6 +90,22 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         accountId: "ops-bot", // optional multi-account channel id
         prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
+        lifeCoach: {
+          enabled: true,
+          cooldownMinutes: 90, // min time between nudges
+          maxNudgesPerDay: 6,
+          tone: "adaptive", // adaptive | supportive | direct
+          allowSoraVisualization: true,
+          objectives: {
+            socialMediaReduction: 1.4,
+            movement: 1.2,
+            focus: 1.2,
+          },
+          interventions: {
+            // allow: ["walk", "social-block", "focus-sprint"],
+            // deny: ["sora-visualization"],
+          },
+        },
       },
     },
   },
@@ -183,6 +199,27 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `accountId`: optional account id for multi-account channels. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
+- `lifeCoach`: enables dynamic intervention planning during heartbeat runs.
+  - `enabled`: turn on adaptive nudges.
+  - `cooldownMinutes`: minimum gap between nudges.
+  - `maxNudgesPerDay`: daily cap for interventions.
+  - `tone`: `adaptive`, `supportive`, or `direct`.
+  - `allowSoraVisualization`: allow optional Sora-style visualization prompts in nudge planning.
+  - `objectives`: weighted priorities for `mood`, `energy`, `focus`, `movement`, `socialMediaReduction`, `stressRegulation`.
+  - `interventions.allow` / `interventions.deny`: filter intervention types (`walk`, `social-block`, `focus-sprint`, `breathing`, `hydration`, `sora-visualization`).
+
+## Life Coach Mode
+
+With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop to heartbeat runs:
+
+- estimate current user state from recent session text signals
+- pick a best-fit intervention from a weighted policy
+- send one clear, low-friction action
+- run timed follow-up check-ins
+- update completion/ignore/reject outcomes to adapt future nudges
+
+Persistent adaptation state is stored under the OpenClaw state directory:
+`agents/<agent-id>/life-coach-state.json`.
 
 ## Delivery behavior
 

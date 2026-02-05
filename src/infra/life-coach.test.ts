@@ -157,5 +157,61 @@ describe("life-coach", () => {
     }
     expect(state.stats[interventionId].completed).toBeGreaterThanOrEqual(1);
   });
-});
 
+  it("generates one due follow-up and records follow-up send on pending intervention", async () => {
+    const initialNow = 1_000_000;
+    const initialPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: { enabled: true, cooldownMinutes: 180 },
+      nowMs: initialNow,
+    });
+    expect(initialPlan.decision).toBeDefined();
+    if (!initialPlan.decision) {
+      return;
+    }
+    expect(initialPlan.decision.phase).toBe("initial");
+
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: initialPlan.decision,
+      nowMs: initialNow,
+    });
+
+    const followUpNow = initialNow + (initialPlan.decision.followUpMinutes + 1) * 60_000;
+    const followUpPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: { enabled: true, cooldownMinutes: 180 },
+      nowMs: followUpNow,
+    });
+    expect(followUpPlan.decision).toBeDefined();
+    expect(followUpPlan.decision?.phase).toBe("follow-up");
+    expect(followUpPlan.decision?.intervention).toBe(initialPlan.decision.intervention);
+
+    if (!followUpPlan.decision) {
+      return;
+    }
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: followUpPlan.decision,
+      nowMs: followUpNow,
+    });
+
+    const statePath = path.join(tmpDir, "agents", "main", "life-coach-state.json");
+    const stateRaw = await fs.readFile(statePath, "utf-8");
+    const state = __lifeCoachTestUtils.normalizeStateFile(
+      JSON.parse(stateRaw) as unknown,
+      followUpNow,
+    );
+    const pending = state.history.find(
+      (entry) =>
+        entry.intervention === initialPlan.decision?.intervention && entry.status === "sent",
+    );
+    expect(pending).toBeDefined();
+    expect(typeof pending?.followUpSentAt).toBe("number");
+    expect(state.history.length).toBe(1);
+  });
+});

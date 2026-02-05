@@ -37,6 +37,7 @@ type LifeCoachHistoryEntry = {
   sentAt: number;
   status: "sent" | "completed" | "ignored" | "rejected";
   followUpMinutes: number;
+  followUpSentAt?: number;
   note?: string;
 };
 
@@ -60,6 +61,7 @@ type InterventionSpec = {
 type ResolvedTone = "supportive" | "direct";
 
 export type LifeCoachDecision = {
+  phase: "initial" | "follow-up";
   intervention: LifeCoachInterventionId;
   score: number;
   rationale: string;
@@ -439,6 +441,7 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
             typeof candidate.id === "string" &&
             typeof candidate.sentAt === "number" &&
             typeof candidate.intervention === "string" &&
+            (candidate.followUpSentAt === undefined || typeof candidate.followUpSentAt === "number") &&
             (candidate.status === "sent" ||
               candidate.status === "completed" ||
               candidate.status === "ignored" ||
@@ -471,6 +474,47 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
     }
   }
   return normalized;
+}
+
+function resolveFollowUpAction(params: {
+  intervention: LifeCoachInterventionId;
+  tone: ResolvedTone;
+}): string {
+  const directPrefix = "Follow-up check now:";
+  const supportivePrefix = "Quick check-in:";
+  const prefix = params.tone === "supportive" ? supportivePrefix : directPrefix;
+  switch (params.intervention) {
+    case "walk":
+      return `${prefix} did you complete the walk? If not, do a 7-minute version now and reply DONE.`;
+    case "social-block":
+      return `${prefix} are distracting social apps still blocked? If not, block for 20 minutes now and reply DONE or NEED HELP.`;
+    case "focus-sprint":
+      return `${prefix} did the focus sprint happen? If not, run a 10-minute sprint now and send one line of progress.`;
+    case "breathing":
+      return `${prefix} take 2 minutes of slow breathing now and confirm when finished.`;
+    case "hydration":
+      return `${prefix} drink one full glass of water now and reply DONE.`;
+    case "sora-visualization":
+      return `${prefix} run the 60-second desired-state visualization and start one immediate action, then reply DONE.`;
+    default:
+      return `${prefix} complete the next tiny step now and reply DONE.`;
+  }
+}
+
+function findDueFollowUp(
+  state: LifeCoachStateFile,
+  now: number,
+): LifeCoachHistoryEntry | undefined {
+  return [...state.history].toReversed().find((entry) => {
+    if (entry.status !== "sent" || typeof entry.sentAt !== "number") {
+      return false;
+    }
+    if (typeof entry.followUpSentAt === "number") {
+      return false;
+    }
+    const followUpMs = Math.max(5, entry.followUpMinutes) * 60_000;
+    return now - entry.sentAt >= followUpMs;
+  });
 }
 
 function resolveStatePath(
@@ -652,7 +696,11 @@ function updatePendingOutcomes(params: {
 
   if (!nextStatus) {
     const followUpMs = Math.max(5, pending.followUpMinutes) * 60_000;
-    if (params.now - pending.sentAt > followUpMs) {
+    const ignoreAfterMs =
+      typeof pending.followUpSentAt === "number"
+        ? pending.followUpSentAt + followUpMs
+        : pending.sentAt + followUpMs * 2;
+    if (params.now > ignoreAfterMs) {
       nextStatus = "ignored";
     }
   }
@@ -718,6 +766,7 @@ function selectIntervention(params: {
 
   const action = best.spec.action({ needs: params.needs, tone: params.tone });
   return {
+    phase: "initial",
     intervention: best.spec.id,
     score: round2(best.score),
     rationale: best.rationale,
@@ -726,6 +775,27 @@ function selectIntervention(params: {
     followUpMinutes: best.spec.followUpMinutes,
     tone: params.tone,
     soraPrompt: resolveSoraPrompt({ intervention: best.spec.id, needs: params.needs }),
+    needs: params.needs,
+  };
+}
+
+function createFollowUpDecision(params: {
+  pending: LifeCoachHistoryEntry;
+  needs: LifeCoachNeedScores;
+  tone: ResolvedTone;
+}): LifeCoachDecision {
+  return {
+    phase: "follow-up",
+    intervention: params.pending.intervention,
+    score: 1,
+    rationale: "due follow-up for pending intervention",
+    action: resolveFollowUpAction({
+      intervention: params.pending.intervention,
+      tone: params.tone,
+    }),
+    fallback: "If completion is blocked, ask for a smaller 5-minute fallback and keep the tone supportive.",
+    followUpMinutes: Math.max(5, params.pending.followUpMinutes),
+    tone: params.tone,
     needs: params.needs,
   };
 }
@@ -754,6 +824,7 @@ function buildPrompt(params: {
     "[AUTOLIFE LIFECOACH]",
     needsLine,
     `Selected intervention: ${params.decision.intervention} (score=${params.decision.score}).`,
+    `Intervention phase: ${params.decision.phase}.`,
     `Tone: ${params.decision.tone}.`,
     `Primary action: ${params.decision.action}`,
     `Fallback action: ${params.decision.fallback}`,
@@ -793,6 +864,25 @@ export async function createLifeCoachHeartbeatPlan(params: {
   const needs = estimateNeeds(messages);
   const objectives = resolveObjectives(lifeCoach);
   const tone = resolveTone(lifeCoach, needs);
+
+  const dueFollowUp = findDueFollowUp(state, now);
+  if (dueFollowUp) {
+    const followUpDecision = createFollowUpDecision({
+      pending: dueFollowUp,
+      needs,
+      tone,
+    });
+    state.updatedAt = now;
+    await saveLifeCoachState(params.agentId, state);
+    return {
+      prompt: buildPrompt({
+        basePrompt: params.basePrompt,
+        decision: followUpDecision,
+        needs,
+      }),
+      decision: followUpDecision,
+    };
+  }
 
   const cooldownMinutes = Math.max(1, lifeCoach.cooldownMinutes ?? DEFAULT_COOLDOWN_MINUTES);
   const maxNudgesPerDay = Math.max(1, lifeCoach.maxNudgesPerDay ?? DEFAULT_MAX_NUDGES_PER_DAY);
@@ -860,6 +950,20 @@ export async function recordLifeCoachDispatch(params: {
   }
   const now = params.nowMs ?? Date.now();
   const state = await loadLifeCoachState(params.agentId, now);
+  if (params.decision.phase === "follow-up") {
+    const pending = [...state.history].toReversed().find(
+      (entry) =>
+        entry.status === "sent" &&
+        !entry.followUpSentAt &&
+        entry.intervention === params.decision?.intervention,
+    );
+    if (pending) {
+      pending.followUpSentAt = now;
+    }
+    state.updatedAt = now;
+    await saveLifeCoachState(params.agentId, state);
+    return;
+  }
   const stat = state.stats[params.decision.intervention];
   stat.sent += 1;
   state.history.push({
