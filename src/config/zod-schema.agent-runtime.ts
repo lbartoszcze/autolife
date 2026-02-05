@@ -31,15 +31,7 @@ export const HeartbeatSchema = z
       .object({
         enabled: z.boolean().optional(),
         objectives: z
-          .object({
-            mood: z.number().min(0).max(2).optional(),
-            energy: z.number().min(0).max(2).optional(),
-            focus: z.number().min(0).max(2).optional(),
-            movement: z.number().min(0).max(2).optional(),
-            socialMediaReduction: z.number().min(0).max(2).optional(),
-            stressRegulation: z.number().min(0).max(2).optional(),
-          })
-          .strict()
+          .record(z.string(), z.number().min(0).max(2))
           .optional(),
         interventions: z
           .object({

@@ -7,7 +7,6 @@ import { resolveStateDir } from "../config/paths.js";
 import type {
   HeartbeatLifeCoachConfig,
   LifeCoachInterventionId,
-  LifeCoachObjective,
 } from "../config/types.agent-defaults.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -20,7 +19,7 @@ type TranscriptMessage = {
   timestamp?: number;
 };
 
-type LifeCoachNeedScores = Record<LifeCoachObjective, number>;
+type LifeCoachNeedScores = Record<string, number>;
 
 type LifeCoachAffectScores = {
   frustration: number;
@@ -36,7 +35,7 @@ type ScienceReference = {
 type ScienceTopicSpec = {
   id: string;
   keywords: string[];
-  objectiveWeights?: Partial<Record<LifeCoachObjective, number>>;
+  objectiveWeights?: Record<string, number>;
   affectWeights?: Partial<Record<keyof LifeCoachAffectScores, number>>;
   confidenceBias?: number;
   minConfidence?: number;
@@ -82,18 +81,13 @@ type LifeCoachHistoryEntry = {
 };
 
 type LifeCoachPreferenceModel = {
-  objectiveBias: Record<LifeCoachObjective, number>;
+  objectiveBias: Record<string, number>;
   interventionAffinity: Record<string, number>;
   supportiveToneBias: number;
   lastLearnedMessageTs: number;
 };
 
-type InterventionStrategy =
-  | "activation"
-  | "friction"
-  | "regulation"
-  | "environment"
-  | "visualization";
+type InterventionStrategy = string;
 
 type LifeCoachStateFile = {
   version: 2;
@@ -105,10 +99,10 @@ type LifeCoachStateFile = {
 
 type InterventionSpec = {
   id: LifeCoachInterventionId;
-  primaryObjective: LifeCoachObjective;
+  primaryObjective: string;
   strategy: InterventionStrategy;
-  objectives: Partial<Record<LifeCoachObjective, number>>;
-  effects: Partial<Record<LifeCoachObjective, number>>;
+  objectives: Record<string, number>;
+  effects: Record<string, number>;
   baseFriction: number;
   followUpMinutes: number;
   action: (params: { needs: LifeCoachNeedScores; tone: ResolvedTone }) => string;
@@ -152,15 +146,8 @@ const DEFAULT_SCIENCE_MODE: ScienceMode = "dynamic";
 const DEFAULT_SCIENCE_MAX_PAPERS = 3;
 const DEFAULT_SCIENCE_FETCH_TIMEOUT_MS = 3_500;
 const DEFAULT_SCIENCE_CACHE_HOURS = 12;
-
-const DEFAULT_OBJECTIVES: Record<LifeCoachObjective, number> = {
-  mood: 1,
-  energy: 0.9,
-  focus: 1,
-  movement: 1,
-  socialMediaReduction: 1.2,
-  stressRegulation: 1,
-};
+const DEFAULT_OBJECTIVE_WEIGHT = 1;
+const DEFAULT_GENERIC_OBJECTIVE = "general";
 
 const COMPLETION_HINTS = [
   "done",
@@ -220,17 +207,6 @@ const LOW_FOCUS_HINTS = [
   "stuck",
 ];
 const LOW_MOOD_HINTS = ["sad", "down", "hopeless", "lonely", "depressed", "empty"];
-const SOCIAL_URGE_HINTS = [
-  "social media",
-  "instagram",
-  "tiktok",
-  "twitter",
-  "x.com",
-  "youtube shorts",
-  "doomscroll",
-  "scrolling",
-];
-const MOVEMENT_HINTS = ["walk", "outside", "steps", "exercise", "workout", "run"];
 
 const FRUSTRATION_HINTS = [
   "frustrated",
@@ -243,15 +219,6 @@ const FRUSTRATION_HINTS = [
 
 const GOAL_CUES = ["want", "goal", "trying to", "need to", "would like", "prefer", "helps", "works"];
 const AVOID_CUES = ["don't", "do not", "can't", "cannot", "hate", "dislike", "annoying", "frustrating", "stop"];
-
-const OBJECTIVE_KEYWORDS: Record<LifeCoachObjective, string[]> = {
-  mood: ["happy", "better", "mood", "sad", "down", "lonely"],
-  energy: ["energy", "tired", "fatigue", "exhausted", "sleepy"],
-  focus: ["focus", "distracted", "procrastinating", "productive"],
-  movement: ["walk", "outside", "exercise", "steps", "workout"],
-  socialMediaReduction: ["social media", "instagram", "tiktok", "twitter", "scrolling", "doomscroll"],
-  stressRegulation: ["stress", "anxious", "panic", "calm", "overwhelmed"],
-};
 
 const SCIENCE_STOPWORDS = new Set([
   "about",
@@ -289,23 +256,6 @@ const SCIENCE_STOPWORDS = new Set([
   "with",
   "would",
   "your",
-]);
-
-const OBJECTIVE_LABELS: Record<LifeCoachObjective, string> = {
-  mood: "emotional stability",
-  energy: "energy availability",
-  focus: "attentional control",
-  movement: "physical activity",
-  socialMediaReduction: "impulse control around feeds",
-  stressRegulation: "stress resilience",
-};
-
-const DYNAMIC_STRATEGY_SET = new Set<InterventionStrategy>([
-  "activation",
-  "friction",
-  "regulation",
-  "environment",
-  "visualization",
 ]);
 
 const SCIENCE_REFERENCE_CACHE = new Map<
@@ -348,6 +298,69 @@ function countMentions(messages: TranscriptMessage[], hints: string[]): number {
   return messages.reduce((acc, msg) => acc + countHintMatches(msg.text, hints), 0);
 }
 
+function normalizeAxisId(value: string): string {
+  const compact = value
+    .trim()
+    .toLowerCase()
+    .replace(/([a-z])([A-Z])/g, "$1-$2")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return compact || DEFAULT_GENERIC_OBJECTIVE;
+}
+
+function humanizeAxisId(value: string): string {
+  return normalizeAxisId(value).replaceAll("-", " ");
+}
+
+function extractMeaningfulTokensFromText(text: string): string[] {
+  const tokens = text.match(/[a-z][a-z0-9'-]{2,}/g) ?? [];
+  return tokens
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 3 && !SCIENCE_STOPWORDS.has(token));
+}
+
+function extractTopDimensions(messages: TranscriptMessage[], limit = 6): string[] {
+  const counts = new Map<string, number>();
+  const userMessages = messages.filter((msg) => msg.role === "user").slice(-24);
+  for (const message of userMessages) {
+    const tokens = extractMeaningfulTokensFromText(message.text);
+    for (const token of tokens) {
+      counts.set(token, (counts.get(token) ?? 0) + 1);
+    }
+  }
+  const ranked = [...counts.entries()]
+    .toSorted((a, b) => b[1] - a[1])
+    .map(([token]) => normalizeAxisId(token))
+    .filter(Boolean);
+  return [...new Set(ranked)].slice(0, limit);
+}
+
+function getPrimaryNeedKey(needs: LifeCoachNeedScores): string {
+  return Object.entries(needs).toSorted((a, b) => b[1] - a[1])[0]?.[0] ?? DEFAULT_GENERIC_OBJECTIVE;
+}
+
+function getAverageNeed(needs: LifeCoachNeedScores): number {
+  const values = Object.values(needs);
+  if (!values.length) {
+    return 0.5;
+  }
+  return values.reduce((acc, value) => acc + value, 0) / values.length;
+}
+
+function containsAny(text: string, hints: string[]): boolean {
+  return hints.some((hint) => text.includes(hint));
+}
+
+function countDimensionMentions(messages: TranscriptMessage[], dimension: string): number {
+  const token = normalizeAxisId(dimension);
+  if (!token) {
+    return 0;
+  }
+  const phrase = token.replaceAll("-", " ");
+  const hints = [token, phrase].filter((value) => value.length > 0);
+  return countMentions(messages, hints);
+}
+
 function normalizeKeywords(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -375,18 +388,17 @@ function normalizeScienceReferences(value: unknown): ScienceReference[] {
 
 function normalizeLifeCoachObjectiveWeights(
   value: unknown,
-): Partial<Record<LifeCoachObjective, number>> | undefined {
+): Record<string, number> | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
   const raw = value as Record<string, unknown>;
-  const normalized: Partial<Record<LifeCoachObjective, number>> = {};
-  for (const objective of Object.keys(DEFAULT_OBJECTIVES) as LifeCoachObjective[]) {
-    const candidate = raw[objective];
+  const normalized: Record<string, number> = {};
+  for (const [objective, candidate] of Object.entries(raw)) {
     if (typeof candidate !== "number") {
       continue;
     }
-    normalized[objective] = clamp01(candidate);
+    normalized[normalizeAxisId(objective)] = clamp01(candidate);
   }
   return Object.keys(normalized).length ? normalized : undefined;
 }
@@ -602,131 +614,112 @@ function summarizeRiskLabel(tokens: string[]): string {
   return top.join("-");
 }
 
-function isInterventionStrategy(value: string): value is InterventionStrategy {
-  return DYNAMIC_STRATEGY_SET.has(value as InterventionStrategy);
-}
-
 function buildDynamicInterventionId(params: {
-  primaryObjective: LifeCoachObjective;
+  primaryObjective: string;
   strategy: InterventionStrategy;
 }): LifeCoachInterventionId {
-  return `dyn:${params.primaryObjective}:${params.strategy}`;
+  return `dyn:${normalizeAxisId(params.primaryObjective)}:${normalizeAxisId(params.strategy)}`;
 }
 
 function parseDynamicInterventionId(
   interventionId: string,
-): { primaryObjective: LifeCoachObjective; strategy: InterventionStrategy } | undefined {
+): { primaryObjective: string; strategy: InterventionStrategy } | undefined {
   const normalized = interventionId.trim().toLowerCase();
   if (!normalized.startsWith("dyn:")) {
     return undefined;
   }
-  const [, objectiveRaw, strategyRaw] = normalized.split(":");
+  const parts = normalized.split(":");
+  if (parts.length < 3) {
+    return undefined;
+  }
+  const objectiveRaw = normalizeAxisId(parts[1] ?? "");
+  const strategyRaw = normalizeAxisId(parts.slice(2).join("-"));
   if (!objectiveRaw || !strategyRaw) {
     return undefined;
   }
-  const objectiveCanonical = (Object.keys(DEFAULT_OBJECTIVES) as LifeCoachObjective[]).find(
-    (objective) => objective.toLowerCase() === objectiveRaw,
-  );
-  if (!objectiveCanonical || !isInterventionStrategy(strategyRaw)) {
-    return undefined;
-  }
   return {
-    primaryObjective: objectiveCanonical,
+    primaryObjective: objectiveRaw,
     strategy: strategyRaw,
   };
 }
 
-function inferPrimaryObjectiveFromNeeds(needs: LifeCoachNeedScores): LifeCoachObjective {
-  return (Object.entries(needs) as Array<[LifeCoachObjective, number]>).toSorted((a, b) => b[1] - a[1])[0]?.[0] ?? "focus";
+function inferPrimaryObjectiveFromNeeds(needs: LifeCoachNeedScores): string {
+  return getPrimaryNeedKey(needs);
 }
 
 function inferPrimaryObjectiveFromMessages(
   messages: TranscriptMessage[],
   needs: LifeCoachNeedScores,
-): LifeCoachObjective {
-  const recentUsers = messages.filter((msg) => msg.role === "user").slice(-24);
-  if (recentUsers.length === 0) {
-    return inferPrimaryObjectiveFromNeeds(needs);
+): string {
+  const inferred = extractTopDimensions(messages, 3)[0];
+  return inferred ?? inferPrimaryObjectiveFromNeeds(needs);
+}
+
+function extractStrategyCandidates(params: {
+  messages: TranscriptMessage[];
+  affect: LifeCoachAffectScores;
+  primaryObjective: string;
+  allowVisualization?: boolean;
+}): InterventionStrategy[] {
+  const recentUsers = params.messages.filter((msg) => msg.role === "user").slice(-24);
+  const text = recentUsers.map((msg) => msg.text).join(" ");
+  const strategyCounts = new Map<string, number>();
+  for (const token of extractMeaningfulTokensFromText(text)) {
+    if (token.endsWith("ing") || token.endsWith("ed") || token.length >= 6) {
+      strategyCounts.set(token, (strategyCounts.get(token) ?? 0) + 1);
+    }
   }
-  const denom = Math.max(1, recentUsers.length * 2);
-  const scored = (Object.keys(OBJECTIVE_KEYWORDS) as LifeCoachObjective[]).map((objective) => {
-    const keywordSignal = countMentions(recentUsers, OBJECTIVE_KEYWORDS[objective]) / denom;
-    const needSignal = needs[objective] ?? 0;
-    return [objective, keywordSignal * 0.55 + needSignal * 0.45] as const;
-  });
-  return scored.toSorted((a, b) => b[1] - a[1])[0]?.[0] ?? inferPrimaryObjectiveFromNeeds(needs);
+  const candidates: string[] = [];
+  for (const [token] of [...strategyCounts.entries()].toSorted((a, b) => b[1] - a[1]).slice(0, 3)) {
+    if (token !== params.primaryObjective) {
+      candidates.push(token);
+    }
+  }
+  if (params.allowVisualization !== false && (text.includes("sora") || text.includes("visualiz"))) {
+    candidates.unshift(`imagery-${normalizeAxisId(params.primaryObjective)}`);
+  }
+  if (params.affect.distress > 0.65) {
+    candidates.push(`affect-distress-${Math.round(params.affect.distress * 10)}`);
+  }
+  if (params.affect.frustration > 0.6) {
+    candidates.push(`affect-frustration-${Math.round(params.affect.frustration * 10)}`);
+  }
+  if (params.affect.momentum < 0.35) {
+    candidates.push(`affect-momentum-${Math.round(params.affect.momentum * 10)}`);
+  }
+  if (!candidates.length) {
+    candidates.push(`execute-${normalizeAxisId(params.primaryObjective)}`);
+  }
+  return [...new Set(candidates.map(normalizeAxisId))];
 }
 
 function inferStrategyFromContext(params: {
   messages: TranscriptMessage[];
-  needs: LifeCoachNeedScores;
   affect: LifeCoachAffectScores;
-  primaryObjective: LifeCoachObjective;
+  primaryObjective: string;
   allowVisualization?: boolean;
 }): InterventionStrategy {
-  const recentUsers = params.messages.filter((msg) => msg.role === "user").slice(-24);
-  const text = recentUsers.map((msg) => msg.text).join(" ");
-
-  if (
-    params.allowVisualization !== false &&
-    (text.includes("sora") || text.includes("visualize") || text.includes("imagine the desired"))
-  ) {
-    return "visualization";
-  }
-  if (params.primaryObjective === "stressRegulation" || params.affect.distress > 0.65) {
-    return "regulation";
-  }
-  if (
-    params.primaryObjective === "socialMediaReduction" ||
-    countHintMatches(text, SOCIAL_URGE_HINTS) > 0
-  ) {
-    return "friction";
-  }
-  if (params.affect.momentum > 0.6 || params.primaryObjective === "movement") {
-    return "activation";
-  }
-  if (params.needs.focus > 0.6 || params.primaryObjective === "focus") {
-    return "environment";
-  }
-  return "activation";
+  return (
+    extractStrategyCandidates({
+      messages: params.messages,
+      affect: params.affect,
+      primaryObjective: params.primaryObjective,
+      allowVisualization: params.allowVisualization,
+    })[0] ?? `execute-${normalizeAxisId(params.primaryObjective)}`
+  );
 }
 
 function inferStrategyFromInterventionId(interventionId: string): InterventionStrategy | undefined {
+  const parsed = parseDynamicInterventionId(interventionId);
+  if (parsed) {
+    return parsed.strategy;
+  }
   const normalized = interventionId.toLowerCase();
-  if (
-    normalized.includes("visual") ||
-    normalized.includes("sora") ||
-    normalized.includes("imagery")
-  ) {
-    return "visualization";
-  }
-  if (
-    normalized.includes("friction") ||
-    normalized.includes("block") ||
-    normalized.includes("limit") ||
-    normalized.includes("shield")
-  ) {
-    return "friction";
-  }
-  if (
-    normalized.includes("regulat") ||
-    normalized.includes("breath") ||
-    normalized.includes("ground") ||
-    normalized.includes("calm")
-  ) {
-    return "regulation";
-  }
-  if (
-    normalized.includes("environment") ||
-    normalized.includes("setup") ||
-    normalized.includes("context")
-  ) {
-    return "environment";
-  }
-  if (normalized.includes("start") || normalized.includes("activation") || normalized.includes("sprint")) {
-    return "activation";
-  }
-  return undefined;
+  const tokens = normalized
+    .split(/[^a-z0-9]+/)
+    .map(normalizeAxisId)
+    .filter((token) => token && token !== "dyn");
+  return tokens[1] ?? tokens[0];
 }
 
 function inferScienceIntervention(
@@ -737,7 +730,6 @@ function inferScienceIntervention(
   const primaryObjective = inferPrimaryObjectiveFromMessages(messages, needs);
   const strategy = inferStrategyFromContext({
     messages,
-    needs,
     affect,
     primaryObjective,
   });
@@ -840,12 +832,12 @@ async function deriveDynamicScienceInsight(params: {
   const riskId = summarizeRiskLabel(tokens);
   const uniqueTerms = [...new Set(tokens)].slice(0, 6);
   const query = `${uniqueTerms.join(" ")} behavior intervention randomized trial`;
-  const primaryNeed = (Object.entries(params.needs) as Array<[LifeCoachObjective, number]>).toSorted(
-    (a, b) => b[1] - a[1],
-  )[0]?.[0];
-  const primaryNeedLabel = primaryNeed ? OBJECTIVE_LABELS[primaryNeed] : "day-to-day functioning";
+  const primaryNeed = getPrimaryNeedKey(params.needs);
+  const primaryNeedLabel = objectiveTitle(primaryNeed);
   const keywordDensity = uniqueTerms.length / 8;
-  const confidence = clamp01(keywordDensity * 0.45 + (primaryNeed ? params.needs[primaryNeed] * 0.35 : 0) + params.affect.distress * 0.2);
+  const confidence = clamp01(
+    keywordDensity * 0.45 + (params.needs[primaryNeed] ?? 0.5) * 0.35 + params.affect.distress * 0.2,
+  );
   if (confidence < runtime.minConfidence) {
     return undefined;
   }
@@ -969,14 +961,7 @@ function emptyStats(): LifeCoachStats {
 
 function emptyPreferenceModel(): LifeCoachPreferenceModel {
   return {
-    objectiveBias: {
-      mood: 0,
-      energy: 0,
-      focus: 0,
-      movement: 0,
-      socialMediaReduction: 0,
-      stressRegulation: 0,
-    },
+    objectiveBias: {},
     interventionAffinity: {},
     supportiveToneBias: 0,
     lastLearnedMessageTs: 0,
@@ -1038,13 +1023,13 @@ function normalizeStateFile(raw: unknown, now: number): LifeCoachStateFile {
   const sourcePreferences = (value as { preferences?: unknown }).preferences;
   if (sourcePreferences && typeof sourcePreferences === "object") {
     const typed = sourcePreferences as Partial<LifeCoachPreferenceModel>;
-    const objectiveBias = typed.objectiveBias as Partial<Record<LifeCoachObjective, number>> | undefined;
+    const objectiveBias = typed.objectiveBias as Partial<Record<string, number>> | undefined;
     const interventionAffinity = typed.interventionAffinity as Partial<Record<string, number>> | undefined;
-    for (const objective of Object.keys(normalized.preferences.objectiveBias) as LifeCoachObjective[]) {
-      const valueForObjective = objectiveBias?.[objective];
-      if (typeof valueForObjective === "number") {
-        normalized.preferences.objectiveBias[objective] = clampSigned(valueForObjective);
+    for (const [objective, valueForObjective] of Object.entries(objectiveBias ?? {})) {
+      if (!objective.trim() || typeof valueForObjective !== "number") {
+        continue;
       }
+      normalized.preferences.objectiveBias[normalizeAxisId(objective)] = clampSigned(valueForObjective);
     }
     for (const [intervention, valueForIntervention] of Object.entries(interventionAffinity ?? {})) {
       if (!intervention.trim() || typeof valueForIntervention !== "number") {
@@ -1125,23 +1110,32 @@ async function saveLifeCoachState(agentId: string, state: LifeCoachStateFile): P
   await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
 }
 
-function resolveObjectives(cfg?: HeartbeatLifeCoachConfig): Record<LifeCoachObjective, number> {
-  const merged = {
-    ...DEFAULT_OBJECTIVES,
-    ...cfg?.objectives,
-  };
-  for (const key of Object.keys(merged) as LifeCoachObjective[]) {
-    merged[key] = Math.max(0, Math.min(2, Number(merged[key] ?? DEFAULT_OBJECTIVES[key])));
+function resolveObjectives(
+  cfg: HeartbeatLifeCoachConfig | undefined,
+  needs: LifeCoachNeedScores,
+): Record<string, number> {
+  const merged: Record<string, number> = {};
+  for (const objective of Object.keys(needs)) {
+    merged[normalizeAxisId(objective)] = DEFAULT_OBJECTIVE_WEIGHT;
+  }
+  for (const [objective, value] of Object.entries(cfg?.objectives ?? {})) {
+    if (typeof value !== "number") {
+      continue;
+    }
+    merged[normalizeAxisId(objective)] = Math.max(0, Math.min(2, value));
+  }
+  if (!Object.keys(merged).length) {
+    merged[DEFAULT_GENERIC_OBJECTIVE] = DEFAULT_OBJECTIVE_WEIGHT;
   }
   return merged;
 }
 
 function applyObjectivePreferenceBias(params: {
-  objectives: Record<LifeCoachObjective, number>;
+  objectives: Record<string, number>;
   preferences: LifeCoachPreferenceModel;
-}): Record<LifeCoachObjective, number> {
+}): Record<string, number> {
   const merged = { ...params.objectives };
-  for (const objective of Object.keys(merged) as LifeCoachObjective[]) {
+  for (const objective of Object.keys(merged)) {
     const bias = params.preferences.objectiveBias[objective] ?? 0;
     merged[objective] = Math.max(0, Math.min(2, round2(merged[objective] * (1 + bias * 0.35))));
   }
@@ -1158,7 +1152,7 @@ function applyPreferenceDecay(state: LifeCoachStateFile, now: number): void {
     return;
   }
   const retention = Math.pow(0.96, elapsedDays);
-  for (const objective of Object.keys(state.preferences.objectiveBias) as LifeCoachObjective[]) {
+  for (const objective of Object.keys(state.preferences.objectiveBias)) {
     state.preferences.objectiveBias[objective] = round2(
       clampSigned(state.preferences.objectiveBias[objective] * retention),
     );
@@ -1209,197 +1203,122 @@ function resolveTone(params: {
   if (params.preferences.supportiveToneBias <= -0.35 && params.affect.distress < 0.45) {
     return "direct";
   }
-  const stressLoad = (params.needs.stressRegulation + params.needs.mood) / 2;
+  const stressLoad = getAverageNeed(params.needs);
   return stressLoad >= 0.6 ? "supportive" : "direct";
 }
 
 function normalizeInterventionLabel(value: string): string {
-  return value.replace(/^dyn:/, "").replaceAll(":", " ");
+  return value
+    .replace(/^dyn:/, "")
+    .split(":")
+    .map((part) => humanizeAxisId(part))
+    .join(" / ");
 }
 
-function objectiveTitle(objective: LifeCoachObjective): string {
-  return OBJECTIVE_LABELS[objective] ?? objective;
+function objectiveTitle(objective: string): string {
+  return humanizeAxisId(objective);
 }
 
 function createInterventionObjectiveWeights(
-  primaryObjective: LifeCoachObjective,
+  primaryObjective: string,
   strategy: InterventionStrategy,
-): Partial<Record<LifeCoachObjective, number>> {
-  const weights: Partial<Record<LifeCoachObjective, number>> = {
-    [primaryObjective]: 1,
-  };
-  if (strategy === "regulation") {
-    weights.stressRegulation = Math.max(weights.stressRegulation ?? 0, 0.85);
-    weights.mood = Math.max(weights.mood ?? 0, 0.55);
+  needs: LifeCoachNeedScores,
+): Record<string, number> {
+  const normalizedPrimary = normalizeAxisId(primaryObjective);
+  const weights: Record<string, number> = { [normalizedPrimary]: 1 };
+  const secondary = Object.entries(needs)
+    .toSorted((a, b) => b[1] - a[1])
+    .map(([key]) => normalizeAxisId(key))
+    .find((key) => key !== normalizedPrimary);
+  if (secondary) {
+    weights[secondary] = 0.35;
   }
-  if (strategy === "friction") {
-    weights.socialMediaReduction = Math.max(weights.socialMediaReduction ?? 0, 0.8);
-    weights.focus = Math.max(weights.focus ?? 0, 0.5);
-  }
-  if (strategy === "activation") {
-    weights.movement = Math.max(weights.movement ?? 0, 0.45);
-    weights.focus = Math.max(weights.focus ?? 0, 0.45);
-  }
-  if (strategy === "environment") {
-    weights.focus = Math.max(weights.focus ?? 0, 0.65);
-    weights.energy = Math.max(weights.energy ?? 0, 0.4);
-  }
-  if (strategy === "visualization") {
-    weights.mood = Math.max(weights.mood ?? 0, 0.5);
-    weights.focus = Math.max(weights.focus ?? 0, 0.4);
-  }
+  const strategyComplexity = normalizeAxisId(strategy).split("-").filter(Boolean).length;
+  weights[normalizedPrimary] = Math.max(weights[normalizedPrimary] ?? 0, clamp01(0.85 + strategyComplexity * 0.03));
   return weights;
 }
 
 function createInterventionEffects(
-  primaryObjective: LifeCoachObjective,
+  primaryObjective: string,
   strategy: InterventionStrategy,
-): Partial<Record<LifeCoachObjective, number>> {
-  const effects: Partial<Record<LifeCoachObjective, number>> = {
-    [primaryObjective]: 0.72,
+  needs: LifeCoachNeedScores,
+): Record<string, number> {
+  const normalizedPrimary = normalizeAxisId(primaryObjective);
+  const effects: Record<string, number> = {
+    [normalizedPrimary]: 0.68,
   };
-  if (strategy === "regulation") {
-    effects.stressRegulation = Math.max(effects.stressRegulation ?? 0, 0.8);
-    effects.mood = Math.max(effects.mood ?? 0, 0.55);
-    effects.focus = Math.max(effects.focus ?? 0, 0.38);
-  } else if (strategy === "friction") {
-    effects.socialMediaReduction = Math.max(effects.socialMediaReduction ?? 0, 0.8);
-    effects.focus = Math.max(effects.focus ?? 0, 0.62);
-  } else if (strategy === "environment") {
-    effects.focus = Math.max(effects.focus ?? 0, 0.68);
-    effects.energy = Math.max(effects.energy ?? 0, 0.42);
-  } else if (strategy === "activation") {
-    effects.movement = Math.max(effects.movement ?? 0, 0.66);
-    effects.energy = Math.max(effects.energy ?? 0, 0.52);
-    effects.mood = Math.max(effects.mood ?? 0, 0.42);
-  } else {
-    effects.focus = Math.max(effects.focus ?? 0, 0.44);
-    effects.mood = Math.max(effects.mood ?? 0, 0.52);
+  const secondary = Object.entries(needs)
+    .toSorted((a, b) => b[1] - a[1])
+    .map(([key]) => normalizeAxisId(key))
+    .find((key) => key !== normalizedPrimary);
+  if (secondary) {
+    effects[secondary] = 0.28;
   }
+  const strategyComplexity = normalizeAxisId(strategy).split("-").filter(Boolean).length;
+  effects[normalizedPrimary] = Math.max(
+    effects[normalizedPrimary] ?? 0,
+    clamp01(0.62 + strategyComplexity * 0.04),
+  );
   return effects;
 }
 
 function baseFrictionForStrategy(strategy: InterventionStrategy): number {
-  if (strategy === "activation") {
-    return 0.2;
-  }
-  if (strategy === "regulation") {
-    return 0.18;
-  }
-  if (strategy === "friction") {
-    return 0.24;
-  }
-  if (strategy === "environment") {
-    return 0.28;
-  }
-  return 0.34;
+  const normalized = normalizeAxisId(strategy);
+  const complexity = normalized.split("-").filter(Boolean).length;
+  return round2(Math.max(0.18, Math.min(0.36, 0.18 + complexity * 0.03)));
 }
 
 function followUpMinutesForStrategy(strategy: InterventionStrategy): number {
-  if (strategy === "activation") {
-    return 25;
-  }
-  if (strategy === "friction") {
-    return 35;
-  }
-  if (strategy === "regulation") {
-    return 20;
-  }
-  if (strategy === "environment") {
-    return 30;
-  }
-  return 40;
+  const complexity = normalizeAxisId(strategy).split("-").filter(Boolean).length;
+  return Math.max(20, Math.min(45, 22 + complexity * 4));
 }
 
 function actionTemplate(params: {
-  primaryObjective: LifeCoachObjective;
+  primaryObjective: string;
   strategy: InterventionStrategy;
   tone: ResolvedTone;
 }): string {
   const supportivePrefix = "Gentle next step:";
   const directPrefix = "Do this now:";
   const prefix = params.tone === "supportive" ? supportivePrefix : directPrefix;
+  const strategy = normalizeAxisId(params.strategy);
+  const objective = objectiveTitle(params.primaryObjective);
 
-  if (params.strategy === "regulation") {
-    return `${prefix} take 90 seconds for 6 slow breaths (4s in, 6s out), then pick one concrete next action.`;
-  }
-  if (params.strategy === "friction") {
-    if (params.primaryObjective === "socialMediaReduction") {
-      return `${prefix} block distracting feeds for 30 minutes and place your phone out of reach before starting your next task.`;
-    }
-    return `${prefix} add one friction layer to distractions (mute, blocker, or device distance) and start a 12-minute focus block.`;
-  }
-  if (params.strategy === "environment") {
-    return `${prefix} reset your environment for ${objectiveTitle(params.primaryObjective)}: clear one blocker, open only one task, then run a 15-minute timer.`;
-  }
-  if (params.strategy === "visualization") {
+  if (strategy.includes("visual") || strategy.includes("imagery") || strategy.includes("sora")) {
     return `${prefix} run a short Sora-style scene of yourself executing the first minute, then immediately do that first minute in real life.`;
   }
-  if (params.primaryObjective === "movement") {
-    return `${prefix} stand up now, step outside if possible, and walk for 10 minutes without feeds.`;
-  }
-  if (params.primaryObjective === "energy") {
-    return `${prefix} drink water, get daylight for 2 minutes, then start one low-friction task for 10 minutes.`;
-  }
-  if (params.primaryObjective === "mood") {
-    return `${prefix} send one short message to someone supportive or write one grounding sentence, then start a 5-minute action.`;
-  }
-  if (params.primaryObjective === "stressRegulation") {
-    return `${prefix} take one calming reset (breath + posture), then do the smallest executable next step for 5 minutes.`;
-  }
-  return `${prefix} choose one meaningful task and run a 15-minute focused start right now.`;
+  return `${prefix} use the "${objectiveTitle(strategy)}" approach for ${objective}: start a 12-minute timer and execute the first visible step now.`;
 }
 
 function fallbackTemplate(params: {
-  primaryObjective: LifeCoachObjective;
+  primaryObjective: string;
   strategy: InterventionStrategy;
 }): string {
   const label = objectiveTitle(params.primaryObjective);
-  if (params.strategy === "visualization") {
+  if (normalizeAxisId(params.strategy).includes("visual")) {
     return `If visualization feels heavy, skip video and execute a 3-minute real-world start aimed at ${label}.`;
   }
   return `If this feels too big, scale to a 3-5 minute version focused on ${label}.`;
 }
 
 function evidenceNoteTemplate(params: {
-  primaryObjective: LifeCoachObjective;
+  primaryObjective: string;
   strategy: InterventionStrategy;
 }): string {
-  if (params.strategy === "regulation") {
-    return "Short breathing and grounding resets can reduce acute distress and improve follow-through on next actions.";
-  }
-  if (params.strategy === "friction") {
-    return "Adding friction to cues and triggers is a robust behavior-change tactic for reducing impulsive loops.";
-  }
-  if (params.strategy === "environment") {
-    return "Environmental structuring reduces decision overhead and increases execution reliability.";
-  }
-  if (params.strategy === "visualization") {
-    return "Brief implementation imagery can improve initiation when paired with immediate real-world execution.";
-  }
-  return "Immediate micro-activation helps break inertia and can increase completion momentum.";
+  return (
+    `Evidence note: use "${objectiveTitle(params.strategy)}" as the operational approach for ${objectiveTitle(params.primaryObjective)}. ` +
+    "Keep the step concrete, low-friction, and immediately executable."
+  );
 }
 
 function toolHintTemplate(params: {
-  primaryObjective: LifeCoachObjective;
+  primaryObjective: string;
   strategy: InterventionStrategy;
 }): string {
-  if (params.strategy === "friction") {
-    return "Use app blocker + DND + physical device distance, then start a timer.";
-  }
-  if (params.strategy === "regulation") {
-    return "Use a breath timer and a single-item checklist for the next action.";
-  }
-  if (params.strategy === "environment") {
-    return "Prepare one-task workspace and run a 15-minute focus timer.";
-  }
-  if (params.strategy === "visualization") {
+  if (normalizeAxisId(params.strategy).includes("visual") || normalizeAxisId(params.strategy).includes("imagery")) {
     return "Use Sora prompt generation only if it immediately leads to a concrete physical step.";
   }
-  if (params.primaryObjective === "movement") {
-    return "Start a 10-minute walk timer and leave the phone in pocket mode.";
-  }
-  return "Use one visible timer and one explicit success criterion.";
+  return `Use one timer and one checklist item aligned with "${objectiveTitle(params.strategy)}".`;
 }
 
 function inferInterventionSemantics(params: {
@@ -1408,11 +1327,15 @@ function inferInterventionSemantics(params: {
   affect: LifeCoachAffectScores;
   messages: TranscriptMessage[];
   allowSoraVisualization: boolean;
-}): { primaryObjective: LifeCoachObjective; strategy: InterventionStrategy } {
+}): { primaryObjective: string; strategy: InterventionStrategy } {
   const parsed = parseDynamicInterventionId(params.interventionId);
   if (parsed) {
-    if (parsed.strategy === "visualization" && !params.allowSoraVisualization) {
-      return { primaryObjective: parsed.primaryObjective, strategy: "activation" };
+    const strategy = normalizeAxisId(parsed.strategy);
+    if (strategy.includes("visual") && !params.allowSoraVisualization) {
+      return {
+        primaryObjective: parsed.primaryObjective,
+        strategy: `execute-${normalizeAxisId(parsed.primaryObjective)}`,
+      };
     }
     return parsed;
   }
@@ -1423,13 +1346,15 @@ function inferInterventionSemantics(params: {
     inferStrategyFromInterventionId(params.interventionId) ??
     inferStrategyFromContext({
       messages: params.messages,
-      needs: params.needs,
       affect: params.affect,
       primaryObjective: inferredObjective,
       allowVisualization: params.allowSoraVisualization,
     });
-  if (inferredStrategy === "visualization" && !params.allowSoraVisualization) {
-    return { primaryObjective: inferredObjective, strategy: "activation" };
+  if (normalizeAxisId(inferredStrategy).includes("visual") && !params.allowSoraVisualization) {
+    return {
+      primaryObjective: inferredObjective,
+      strategy: `execute-${normalizeAxisId(inferredObjective)}`,
+    };
   }
   return {
     primaryObjective: inferredObjective,
@@ -1455,8 +1380,8 @@ function materializeInterventionSpec(params: {
     id: params.interventionId,
     primaryObjective: semantics.primaryObjective,
     strategy: semantics.strategy,
-    objectives: createInterventionObjectiveWeights(semantics.primaryObjective, semantics.strategy),
-    effects: createInterventionEffects(semantics.primaryObjective, semantics.strategy),
+    objectives: createInterventionObjectiveWeights(semantics.primaryObjective, semantics.strategy, params.needs),
+    effects: createInterventionEffects(semantics.primaryObjective, semantics.strategy, params.needs),
     baseFriction: baseFrictionForStrategy(semantics.strategy),
     followUpMinutes: followUpMinutesForStrategy(semantics.strategy),
     action: ({ tone }) =>
@@ -1477,37 +1402,32 @@ function materializeInterventionSpec(params: {
       primaryObjective: semantics.primaryObjective,
       strategy: semantics.strategy,
     }),
-    supportsSora: semantics.strategy === "visualization",
+    supportsSora:
+      normalizeAxisId(semantics.strategy).includes("visual") ||
+      normalizeAxisId(semantics.strategy).includes("imagery") ||
+      normalizeAxisId(semantics.strategy).includes("sora"),
   };
 }
 
 function resolveStrategiesForObjective(params: {
-  objective: LifeCoachObjective;
-  needs: LifeCoachNeedScores;
+  objective: string;
   affect: LifeCoachAffectScores;
+  messages: TranscriptMessage[];
   allowSoraVisualization: boolean;
 }): InterventionStrategy[] {
-  const strategies = new Set<InterventionStrategy>();
-  strategies.add("activation");
-  strategies.add("environment");
-  if (
-    params.objective === "socialMediaReduction" ||
-    params.objective === "focus" ||
-    params.needs.socialMediaReduction > 0.55
-  ) {
-    strategies.add("friction");
+  const strategies = new Set<string>(
+    extractStrategyCandidates({
+      messages: params.messages,
+      affect: params.affect,
+      primaryObjective: params.objective,
+      allowVisualization: params.allowSoraVisualization,
+    }),
+  );
+  strategies.add(`${normalizeAxisId(params.objective)}-plan`);
+  if (!strategies.size) {
+    strategies.add("micro-step");
   }
-  if (
-    params.objective === "stressRegulation" ||
-    params.objective === "mood" ||
-    params.affect.distress > 0.55
-  ) {
-    strategies.add("regulation");
-  }
-  if (params.allowSoraVisualization && params.affect.momentum < 0.75) {
-    strategies.add("visualization");
-  }
-  return [...strategies];
+  return [...strategies].slice(0, 4);
 }
 
 function buildDynamicInterventions(params: {
@@ -1517,20 +1437,21 @@ function buildDynamicInterventions(params: {
   allowSoraVisualization: boolean;
   scienceInsight?: ScienceInsight;
 }): InterventionSpec[] {
-  const rankedObjectives = (Object.entries(params.needs) as Array<[LifeCoachObjective, number]>).toSorted(
-    (a, b) => b[1] - a[1],
-  );
+  const rankedObjectives = Object.entries(params.needs).toSorted((a, b) => b[1] - a[1]);
   const selectedObjectives = rankedObjectives
     .filter(([, score], idx) => score >= 0.25 || idx === 0)
+    .map(([objective]) => normalizeAxisId(objective))
+    .filter(Boolean)
+    .filter((objective, idx, arr) => arr.indexOf(objective) === idx)
     .slice(0, 3)
-    .map(([objective]) => objective);
+    .map((objective) => objective);
   const generated = new Map<string, InterventionSpec>();
 
   for (const objective of selectedObjectives) {
     const strategies = resolveStrategiesForObjective({
       objective,
-      needs: params.needs,
       affect: params.affect,
+      messages: params.messages,
       allowSoraVisualization: params.allowSoraVisualization,
     });
     for (const strategy of strategies) {
@@ -1570,17 +1491,18 @@ function resolveActiveInterventions(
   candidates: InterventionSpec[],
   cfg?: HeartbeatLifeCoachConfig,
 ): InterventionSpec[] {
-  const allow = new Set(cfg?.interventions?.allow ?? []);
-  const deny = new Set(cfg?.interventions?.deny ?? []);
+  const allow = new Set((cfg?.interventions?.allow ?? []).map((id) => id.trim().toLowerCase()));
+  const deny = new Set((cfg?.interventions?.deny ?? []).map((id) => id.trim().toLowerCase()));
   const allowSoraVisualization = cfg?.allowSoraVisualization ?? DEFAULT_ALLOW_SORA;
   return candidates.filter((spec) => {
+    const specId = spec.id.trim().toLowerCase();
     if (spec.supportsSora && !allowSoraVisualization) {
       return false;
     }
-    if (allow.size > 0 && !allow.has(spec.id)) {
+    if (allow.size > 0 && !allow.has(specId)) {
       return false;
     }
-    if (deny.has(spec.id)) {
+    if (deny.has(specId)) {
       return false;
     }
     return true;
@@ -1590,40 +1512,42 @@ function resolveActiveInterventions(
 function estimateNeeds(messages: TranscriptMessage[]): LifeCoachNeedScores {
   const recentUsers = messages.filter((msg) => msg.role === "user").slice(-24);
   if (recentUsers.length === 0) {
-    return {
-      mood: 0.45,
-      energy: 0.5,
-      focus: 0.5,
-      movement: 0.5,
-      socialMediaReduction: 0.55,
-      stressRegulation: 0.45,
-    };
+    return { [DEFAULT_GENERIC_OBJECTIVE]: 0.5 };
   }
 
-  const positiveHits = countMentions(recentUsers, POSITIVE_HINTS);
-  const stressHits = countMentions(recentUsers, STRESS_HINTS);
-  const lowEnergyHits = countMentions(recentUsers, LOW_ENERGY_HINTS);
-  const lowFocusHits = countMentions(recentUsers, LOW_FOCUS_HINTS);
-  const lowMoodHits = countMentions(recentUsers, LOW_MOOD_HINTS);
-  const socialHits = countMentions(recentUsers, SOCIAL_URGE_HINTS);
-  const movementHits = countMentions(recentUsers, MOVEMENT_HINTS);
+  const dimensions = extractTopDimensions(recentUsers, 6);
+  if (!dimensions.length) {
+    dimensions.push(DEFAULT_GENERIC_OBJECTIVE);
+  }
+
+  const positiveHits = countMentions(recentUsers, POSITIVE_HINTS) + countMentions(recentUsers, COMPLETION_HINTS);
+  const stressHits =
+    countMentions(recentUsers, STRESS_HINTS) +
+    countMentions(recentUsers, FRUSTRATION_HINTS) +
+    countMentions(recentUsers, REJECTION_HINTS);
+  const lowActivationHits = countMentions(recentUsers, LOW_ENERGY_HINTS) + countMentions(recentUsers, LOW_FOCUS_HINTS);
   const denom = Math.max(1, recentUsers.length * 2);
+  const baseLoad = clamp01(stressHits / denom + lowActivationHits / (denom * 1.5) - positiveHits / (denom * 2));
 
-  const stress = clamp01(stressHits / denom + lowFocusHits / (denom * 2));
-  const lowMood = clamp01(lowMoodHits / denom + stress / 3 - positiveHits / (denom * 2));
-  const lowEnergy = clamp01(lowEnergyHits / denom + stress / 4 - positiveHits / (denom * 3));
-  const lowFocus = clamp01(lowFocusHits / denom + socialHits / (denom * 1.5));
-  const socialUrge = clamp01(socialHits / denom + lowFocus / 4);
-  const movementNeed = clamp01(0.55 + socialUrge / 5 + lowEnergy / 5 - movementHits / denom);
-
-  return {
-    mood: round2(lowMood),
-    energy: round2(lowEnergy),
-    focus: round2(lowFocus),
-    movement: round2(movementNeed),
-    socialMediaReduction: round2(socialUrge),
-    stressRegulation: round2(stress),
-  };
+  const needs: LifeCoachNeedScores = {};
+  for (const dimension of dimensions) {
+    const mentions = countDimensionMentions(recentUsers, dimension);
+    const mentionSignal = clamp01(mentions / Math.max(1, recentUsers.length * 1.2));
+    const dimensionToken = normalizeAxisId(dimension).replaceAll("-", " ");
+    const messageNegativity = recentUsers.filter(
+      (msg) =>
+        msg.text.includes(dimensionToken) &&
+        (containsAny(msg.text, STRESS_HINTS) ||
+          containsAny(msg.text, FRUSTRATION_HINTS) ||
+          containsAny(msg.text, REJECTION_HINTS) ||
+          containsAny(msg.text, LOW_FOCUS_HINTS) ||
+          containsAny(msg.text, LOW_ENERGY_HINTS)),
+    ).length;
+    const negativitySignal = clamp01(messageNegativity / Math.max(1, recentUsers.length));
+    const severity = clamp01(0.28 + mentionSignal * 0.5 + negativitySignal * 0.3 + baseLoad * 0.2);
+    needs[dimension] = round2(severity);
+  }
+  return needs;
 }
 
 function estimateAffect(
@@ -1631,11 +1555,13 @@ function estimateAffect(
   needs: LifeCoachNeedScores,
 ): LifeCoachAffectScores {
   const recentUsers = messages.filter((msg) => msg.role === "user").slice(-20);
+  const averageNeed = getAverageNeed(needs);
+  const topNeed = needs[getPrimaryNeedKey(needs)] ?? averageNeed;
   if (recentUsers.length === 0) {
     return {
-      frustration: round2(clamp01((needs.focus + needs.stressRegulation) / 2.6)),
-      distress: round2(clamp01((needs.stressRegulation + needs.mood) / 2)),
-      momentum: round2(clamp01(0.35 - needs.focus * 0.2 + (1 - needs.energy) * 0.1)),
+      frustration: round2(clamp01(averageNeed * 0.55 + topNeed * 0.15)),
+      distress: round2(clamp01(averageNeed * 0.6)),
+      momentum: round2(clamp01(0.35 - averageNeed * 0.28)),
     };
   }
   const denom = Math.max(1, recentUsers.length * 2);
@@ -1643,13 +1569,11 @@ function estimateAffect(
     countMentions(recentUsers, FRUSTRATION_HINTS) + countMentions(recentUsers, REJECTION_HINTS);
   const distressHits = countMentions(recentUsers, STRESS_HINTS) + countMentions(recentUsers, LOW_MOOD_HINTS);
   const positiveHits = countMentions(recentUsers, POSITIVE_HINTS) + countMentions(recentUsers, COMPLETION_HINTS);
-  const frustration = clamp01(frustrationHits / denom + needs.focus / 4 + needs.stressRegulation / 4);
+  const frustration = clamp01(frustrationHits / denom + averageNeed * 0.35 + topNeed * 0.18);
   const distress = clamp01(
-    distressHits / denom + needs.stressRegulation * 0.4 + needs.mood * 0.3 - positiveHits / (denom * 2),
+    distressHits / denom + averageNeed * 0.45 + topNeed * 0.22 - positiveHits / (denom * 2),
   );
-  const momentum = clamp01(
-    positiveHits / denom + (1 - needs.focus) * 0.3 + (1 - needs.energy) * 0.2 - frustration / 4,
-  );
+  const momentum = clamp01(positiveHits / denom + (1 - averageNeed) * 0.35 - frustration / 4);
   return {
     frustration: round2(frustration),
     distress: round2(distress),
@@ -1675,9 +1599,7 @@ function deriveScienceInsight(params: {
     const keywordSignal = keywordHits / denom;
     let objectiveSignal = 0;
     if (topic.objectiveWeights) {
-      for (const [objective, weight] of Object.entries(topic.objectiveWeights) as Array<
-        [LifeCoachObjective, number]
-      >) {
+      for (const [objective, weight] of Object.entries(topic.objectiveWeights)) {
         objectiveSignal += (params.needs[objective] ?? 0) * clamp01(weight);
       }
     }
@@ -1773,15 +1695,24 @@ function learnPreferencesFromMessages(params: {
     const completionHits = countHintMatches(text, COMPLETION_HINTS);
     const frustrationHits = countHintMatches(text, REJECTION_HINTS) + countHintMatches(text, FRUSTRATION_HINTS);
 
-    for (const objective of Object.keys(OBJECTIVE_KEYWORDS) as LifeCoachObjective[]) {
-      const mentions = countHintMatches(text, OBJECTIVE_KEYWORDS[objective]);
-      if (mentions <= 0) {
-        continue;
-      }
+    const dimensions = extractTopDimensions(
+      [{ role: "user", text, timestamp: message.timestamp }],
+      3,
+    );
+    if (!dimensions.length) {
+      dimensions.push(DEFAULT_GENERIC_OBJECTIVE);
+    }
+    for (const objective of dimensions) {
+      const objectiveToken = normalizeAxisId(objective);
+      const mentions = Math.max(
+        1,
+        countHintMatches(text, [objectiveToken, objectiveToken.replaceAll("-", " ")]),
+      );
       const upDelta = positiveCueHits > 0 ? 0.03 * mentions * positiveCueHits : 0;
       const downDelta = avoidCueHits > 0 ? 0.02 * mentions * avoidCueHits : 0;
-      params.state.preferences.objectiveBias[objective] = round2(
-        clampSigned(params.state.preferences.objectiveBias[objective] + upDelta - downDelta),
+      const current = params.state.preferences.objectiveBias[objectiveToken] ?? 0;
+      params.state.preferences.objectiveBias[objectiveToken] = round2(
+        clampSigned(current + upDelta - downDelta),
       );
     }
     if (frustrationHits > 0) {
@@ -1800,43 +1731,19 @@ function learnPreferencesFromMessages(params: {
   params.state.preferences.lastLearnedMessageTs = maxTimestamp;
 }
 
-function inferObjectivesFromInterventionId(intervention: string): LifeCoachObjective[] {
+function inferObjectivesFromInterventionId(intervention: string): string[] {
   const parsed = parseDynamicInterventionId(intervention);
   if (parsed) {
     return [parsed.primaryObjective];
   }
   const normalized = intervention.toLowerCase();
-  const guessed: LifeCoachObjective[] = [];
-  for (const objective of Object.keys(OBJECTIVE_KEYWORDS) as LifeCoachObjective[]) {
-    if (normalized.includes(objective.toLowerCase())) {
-      guessed.push(objective);
-    }
-  }
-  if (normalized.includes("focus")) {
-    guessed.push("focus");
-  }
-  if (normalized.includes("social") || normalized.includes("scroll")) {
-    guessed.push("socialMediaReduction");
-  }
-  if (normalized.includes("stress") || normalized.includes("breath") || normalized.includes("calm")) {
-    guessed.push("stressRegulation");
-  }
-  if (normalized.includes("move") || normalized.includes("walk") || normalized.includes("exercise")) {
-    guessed.push("movement");
-  }
-  if (normalized.includes("energy") || normalized.includes("sleep") || normalized.includes("hydrate")) {
-    guessed.push("energy");
-  }
-  if (normalized.includes("mood")) {
-    guessed.push("mood");
-  }
-  if (normalized.includes("smok") || normalized.includes("nicotine") || normalized.includes("vape")) {
-    guessed.push("stressRegulation");
-    guessed.push("focus");
-  }
+  const guessed = normalized
+    .split(/[^a-z0-9]+/)
+    .map(normalizeAxisId)
+    .filter((token) => token.length > 2 && token !== "dyn")
+    .slice(0, 2);
   if (!guessed.length) {
-    const topObjective = (Object.keys(DEFAULT_OBJECTIVES) as LifeCoachObjective[])[0];
-    guessed.push(topObjective);
+    guessed.push(DEFAULT_GENERIC_OBJECTIVE);
   }
   return [...new Set(guessed)];
 }
@@ -1928,19 +1835,8 @@ function resolveSoraPrompt(decision: {
   if (!decision.spec.supportsSora) {
     return undefined;
   }
-  const topNeed = (Object.entries(decision.needs) as Array<[LifeCoachObjective, number]>).toSorted(
-    (a, b) => b[1] - a[1],
-  )[0]?.[0];
-  const openingBeat =
-    topNeed === "socialMediaReduction"
-      ? "phone is placed face down in another room"
-      : topNeed === "focus"
-        ? "single task is opened with notifications off"
-        : topNeed === "stressRegulation"
-          ? "breath slows and shoulders relax"
-          : topNeed === "movement"
-            ? "user steps outside and begins walking"
-            : "user starts one clear, immediate action";
+  const topNeed = getPrimaryNeedKey(decision.needs);
+  const openingBeat = `user starts a concrete action that improves ${objectiveTitle(topNeed)}`;
   const emotionalTone =
     decision.affect.distress > 0.65
       ? "gentle, grounded, emotionally safe"
@@ -2039,7 +1935,7 @@ function selectIntervention(params: {
   activeInterventions: InterventionSpec[];
   needs: LifeCoachNeedScores;
   affect: LifeCoachAffectScores;
-  objectives: Record<LifeCoachObjective, number>;
+  objectives: Record<string, number>;
   state: LifeCoachStateFile;
   preferences: LifeCoachPreferenceModel;
   tone: ResolvedTone;
@@ -2083,9 +1979,11 @@ function selectIntervention(params: {
     const reactance = rejectionRisk(stats);
     const preferenceAffinity = params.preferences.interventionAffinity[spec.id] ?? 0;
     const fatigue = computeInterventionFatigue(params.state, spec.id);
+    const averageNeed = getAverageNeed(params.needs);
+    const topNeed = getPrimaryNeedKey(params.needs);
 
     let expectedGain = 0;
-    for (const objective of Object.keys(params.objectives) as LifeCoachObjective[]) {
+    for (const objective of Object.keys(params.objectives)) {
       const need = params.needs[objective] ?? 0;
       const objectiveWeight = params.objectives[objective] ?? 1;
       const effect = spec.effects[objective] ?? 0;
@@ -2095,33 +1993,27 @@ function selectIntervention(params: {
 
     const friction =
       spec.baseFriction +
-      (params.needs.energy > 0.75 ? 0.08 : 0) +
+      (averageNeed > 0.75 ? 0.08 : 0) +
       (params.affect.frustration > 0.55 && spec.baseFriction > 0.28 ? 0.1 : 0);
     const relapseBoost =
-      params.relapsePressure > 0.45 && params.needs.socialMediaReduction > 0.6
-        ? spec.primaryObjective === "socialMediaReduction" && spec.strategy === "friction"
-          ? 0.12
-          : spec.primaryObjective === "focus" &&
-              (spec.strategy === "activation" || spec.strategy === "environment")
-            ? 0.07
-            : spec.strategy === "regulation"
-              ? 0.05
+      params.relapsePressure > 0.45
+        ? spec.primaryObjective === topNeed
+          ? 0.1
+          : spec.baseFriction <= 0.24
+            ? 0.05
             : 0
         : 0;
     const distressBoost =
-      params.affect.distress > 0.55 &&
-      (spec.strategy === "regulation" ||
-        spec.primaryObjective === "stressRegulation" ||
-        spec.primaryObjective === "mood")
+      params.affect.distress > 0.55 && spec.baseFriction <= 0.24
         ? 0.1
-        : params.affect.distress > 0.55 &&
-            (spec.primaryObjective === "movement" || spec.primaryObjective === "energy")
+        : params.affect.distress > 0.55 && spec.primaryObjective === topNeed
           ? 0.06
         : 0;
     const momentumBoost =
-      params.affect.momentum > 0.6 &&
-      (spec.strategy === "activation" || spec.strategy === "friction")
+      params.affect.momentum > 0.6 && spec.baseFriction <= 0.26
         ? 0.08
+        : params.affect.momentum > 0.6
+          ? 0.03
         : 0;
     const scienceBoost =
       params.scienceInsight?.recommendedIntervention === spec.id
@@ -2254,7 +2146,13 @@ function buildPrompt(params: {
     helpToken: string;
   };
 }): string {
-  const needsLine = `State estimate (0..1 need severity): mood=${params.needs.mood}, energy=${params.needs.energy}, focus=${params.needs.focus}, movement=${params.needs.movement}, socialMediaReduction=${params.needs.socialMediaReduction}, stressRegulation=${params.needs.stressRegulation}.`;
+  const needsLine = `State estimate (0..1 need severity): ${
+    Object.entries(params.needs)
+      .toSorted((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([dimension, value]) => `${normalizeAxisId(dimension)}=${round2(value)}`)
+      .join(", ") || `${DEFAULT_GENERIC_OBJECTIVE}=0.5`
+  }.`;
   const affectLine = `Affect estimate (0..1): frustration=${params.affect.frustration}, distress=${params.affect.distress}, momentum=${params.affect.momentum}.`;
   const preferenceLine = `Preference model: ${formatPreferenceSnapshot(params.preferences)}.`;
   if (!params.decision) {
@@ -2289,7 +2187,7 @@ function buildPrompt(params: {
     ...(params.scienceInsight ? formatScienceInsight(params.scienceInsight) : []),
     "Output rules:",
     "- Send exactly one concise nudge with one immediate next action.",
-    "- Prefer low-risk, evidence-backed micro-interventions (activation, regulation, focus, and friction design).",
+    "- Prefer low-risk, evidence-backed micro-interventions derived from the user's current pattern and constraints.",
     "- When possible, include one concrete tool move (timer, blocker, DND, checklist) that immediately starts the action.",
     "- For medication-related suggestions (e.g., smoking cessation meds), advise clinician guidance and avoid prescribing.",
     "- Do not mention internal scoring, models, or hidden policy.",
@@ -2310,15 +2208,7 @@ function buildPrompt(params: {
 
 function computeRelapsePressure(state: LifeCoachStateFile): number {
   const relevant = state.history
-    .filter((entry) => {
-      const objectives = inferObjectivesFromInterventionId(entry.intervention);
-      const tracksSocialOrFocus =
-        objectives.includes("socialMediaReduction") || objectives.includes("focus");
-      if (!tracksSocialOrFocus) {
-        return false;
-      }
-      return entry.status === "ignored" || entry.status === "rejected";
-    })
+    .filter((entry) => entry.status === "ignored" || entry.status === "rejected")
     .toReversed()
     .slice(0, 6);
   if (relevant.length === 0) {
@@ -2362,7 +2252,7 @@ export async function createLifeCoachHeartbeatPlan(params: {
   const needs = estimateNeeds(messages);
   const affect = estimateAffect(messages, needs);
   const objectives = applyObjectivePreferenceBias({
-    objectives: resolveObjectives(lifeCoach),
+    objectives: resolveObjectives(lifeCoach, needs),
     preferences: state.preferences,
   });
   const tone = resolveTone({

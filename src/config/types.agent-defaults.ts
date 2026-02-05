@@ -18,20 +18,14 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
 };
 
-export type LifeCoachObjective =
-  | "mood"
-  | "energy"
-  | "focus"
-  | "movement"
-  | "socialMediaReduction"
-  | "stressRegulation";
+export type LifeCoachObjective = string;
 
 export type LifeCoachInterventionId = string;
 
 export type HeartbeatLifeCoachConfig = {
   /** Enable dynamic habit interventions during heartbeat runs. */
   enabled?: boolean;
-  /** Priority weights for objectives (0..2, default: balanced). */
+  /** Priority weights for dynamic objective dimensions (0..2). */
   objectives?: Partial<Record<LifeCoachObjective, number>>;
   /**
    * Intervention allow/deny lists.

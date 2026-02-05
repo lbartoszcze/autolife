@@ -108,13 +108,13 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
             minConfidence: 0.4,
           },
           objectives: {
-            socialMediaReduction: 1.4,
-            movement: 1.2,
-            focus: 1.2,
+            doomscrolling: 1.4,
+            sleep-latency: 1.1,
+            deep-work: 1.2,
           },
           interventions: {
-            // allow: ["dyn:focus:activation", "dyn:socialMediaReduction:friction"],
-            // deny: ["dyn:mood:visualization"],
+            // allow: ["dyn:doomscrolling:reduce-friction", "dyn:deep-work:starter-step"],
+            // deny: ["dyn:general:visualization"],
           },
         },
       },
@@ -228,8 +228,8 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `maxPapers`: max PubMed papers attached in dynamic mode.
     - `fetchTimeoutMs`: PubMed fetch timeout for dynamic mode.
     - `cacheHours`: dynamic evidence cache TTL.
-  - `objectives`: weighted priorities for `mood`, `energy`, `focus`, `movement`, `socialMediaReduction`, `stressRegulation`.
-  - `interventions.allow` / `interventions.deny`: filter runtime-generated intervention IDs (for example: `dyn:focus:activation`, `dyn:socialMediaReduction:friction`, `dyn:stressRegulation:regulation`, `dyn:mood:visualization`).
+  - `objectives`: weighted priorities for any dynamic dimension key (for example: `doomscrolling`, `sleep-latency`, `deep-work`).
+  - `interventions.allow` / `interventions.deny`: filter runtime-generated intervention IDs (for example: `dyn:doomscrolling:reduce-friction`, `dyn:deep-work:starter-step`, `dyn:general:visualization`).
 
 ## Life Coach Mode
 
@@ -269,7 +269,7 @@ Example catalog entry:
     "objectiveWeights": { "focus": 0.4, "mood": 0.2 },
     "confidenceBias": 0.15,
     "minConfidence": 0.3,
-    "recommendedIntervention": "dyn:focus:activation",
+    "recommendedIntervention": "dyn:deep-work:starter-step",
     "trajectoryForecast": "If this pattern continues, next-day focus can degrade.",
     "improvementForecast": "Time-boxing gaming and adding a startup sprint can restore consistency.",
     "recommendedAction": "Set a hard cutoff and run one 20-minute focus sprint first.",

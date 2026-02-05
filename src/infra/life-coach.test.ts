@@ -106,8 +106,9 @@ describe("life-coach", () => {
     expect(plan.prompt).toContain("[AUTOLIFE LIFECOACH]");
     expect(plan.decision).toBeDefined();
     expect(plan.decision?.intervention).toContain("dyn:");
-    expect(plan.decision?.needs.socialMediaReduction).toBeGreaterThan(0.5);
-    expect(plan.decision?.needs.focus).toBeGreaterThan(0.45);
+    const needValues = Object.values(plan.decision?.needs ?? {});
+    expect(needValues.length).toBeGreaterThan(0);
+    expect(Math.max(...needValues)).toBeGreaterThan(0.45);
   });
 
   it("injects science forecast and paper links for smoking risk", async () => {
@@ -1056,12 +1057,8 @@ describe("life-coach", () => {
         stats: {},
         preferences: {
           objectiveBias: {
-            mood: 0,
-            energy: 0,
-            focus: 0,
-            movement: 0,
-            socialMediaReduction: 0,
-            stressRegulation: 0,
+            "doomscrolling": 0,
+            "deep-work": 0,
           },
           interventionAffinity: {
             "dyn:focus:activation": 0.7,
