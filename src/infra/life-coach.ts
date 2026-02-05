@@ -676,6 +676,11 @@ function updatePendingOutcomes(params: {
   state: LifeCoachStateFile;
   messages: TranscriptMessage[];
   now: number;
+  actionContract: {
+    enabled: boolean;
+    doneToken: string;
+    helpToken: string;
+  };
 }): void {
   const pending = [...params.state.history]
     .toReversed()
@@ -695,8 +700,18 @@ function updatePendingOutcomes(params: {
   });
 
   let nextStatus: LifeCoachHistoryEntry["status"] | null = null;
+  const doneToken = params.actionContract.doneToken.trim().toLowerCase();
+  const helpToken = params.actionContract.helpToken.trim().toLowerCase();
   for (const message of relevantMessages) {
     const text = message.text;
+    if (doneToken && text.includes(doneToken)) {
+      nextStatus = "completed";
+      break;
+    }
+    if (helpToken && text.includes(helpToken)) {
+      nextStatus = "rejected";
+      break;
+    }
     if (countHintMatches(text, COMPLETION_HINTS) > 0) {
       nextStatus = "completed";
       break;
@@ -907,14 +922,19 @@ export async function createLifeCoachHeartbeatPlan(params: {
   if (!lifeCoach?.enabled) {
     return { prompt: params.basePrompt };
   }
+  const actionContract = resolveActionContract(lifeCoach);
 
   const state = await loadLifeCoachState(params.agentId, now);
   const messages = await loadTranscriptMessages(params.sessionEntry?.sessionFile);
-  updatePendingOutcomes({ state, messages, now });
+  updatePendingOutcomes({
+    state,
+    messages,
+    now,
+    actionContract,
+  });
 
   const needs = estimateNeeds(messages);
   const objectives = resolveObjectives(lifeCoach);
-  const actionContract = resolveActionContract(lifeCoach);
   const tone = resolveTone(lifeCoach, needs);
   const relapsePressure = computeRelapsePressure(state);
 

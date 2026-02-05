@@ -285,4 +285,63 @@ describe("life-coach", () => {
     expect(pressure).toBeGreaterThan(0);
     expect(pressure).toBeLessThanOrEqual(1);
   });
+
+  it("maps configured help token to blocked outcome", async () => {
+    const sentAt = 200_000;
+    const initialPlan = await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      lifeCoach: {
+        enabled: true,
+        actionContract: { enabled: true, doneToken: "ALL_DONE", helpToken: "STUCK_HELP" },
+      },
+      nowMs: sentAt,
+    });
+    expect(initialPlan.decision).toBeDefined();
+    if (!initialPlan.decision) {
+      return;
+    }
+
+    await recordLifeCoachDispatch({
+      agentId: "main",
+      decision: initialPlan.decision,
+      nowMs: sentAt,
+    });
+
+    const sessionFile = path.join(tmpDir, "session-help-token.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      buildSessionLine({
+        role: "user",
+        text: "STUCK_HELP",
+        timestamp: sentAt + 60_000,
+      }),
+      "utf-8",
+    );
+
+    await createLifeCoachHeartbeatPlan({
+      cfg: BASE_CFG,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: sentAt + 70_000,
+        sessionFile,
+      },
+      lifeCoach: {
+        enabled: true,
+        actionContract: { enabled: true, doneToken: "ALL_DONE", helpToken: "STUCK_HELP" },
+      },
+      nowMs: sentAt + 70_000,
+    });
+
+    const statePath = path.join(tmpDir, "agents", "main", "life-coach-state.json");
+    const stateRaw = await fs.readFile(statePath, "utf-8");
+    const state = __lifeCoachTestUtils.normalizeStateFile(
+      JSON.parse(stateRaw) as unknown,
+      sentAt + 70_000,
+    );
+    expect(state.stats[initialPlan.decision.intervention].rejected).toBeGreaterThanOrEqual(1);
+  });
 });
