@@ -55,7 +55,7 @@ describe("forecast-agent", () => {
       evidence: [],
     });
 
-    expect(forecast.withIntervention).toContain("No intervention-adjusted trajectory available");
+    expect(forecast.withIntervention).toContain("With a targeted intervention");
     expect(forecast.baseline).toContain("Without intervention");
     expect(forecast.confidence).toBeGreaterThan(0);
   });

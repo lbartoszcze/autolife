@@ -53,6 +53,10 @@ function toTitle(id: string): string {
     .join(" ");
 }
 
+function toSentence(id: string): string {
+  return toTitle(id).toLowerCase();
+}
+
 function average(values: number[]): number {
   if (values.length === 0) {
     return 0;
@@ -86,6 +90,36 @@ const NON_OBJECTIVE_IDS = new Set([
   "general",
 ]);
 
+const REDUCE_OBJECTIVE_HINTS = [
+  "doomscroll",
+  "scroll",
+  "social-media",
+  "distraction",
+  "distracted",
+  "stress",
+  "anxious",
+  "anxiety",
+  "frustration",
+  "frustrated",
+  "procrast",
+  "overwhelm",
+  "smoking",
+  "craving",
+];
+
+const STRENGTHEN_OBJECTIVE_HINTS = [
+  "focus",
+  "sleep",
+  "energy",
+  "mood",
+  "momentum",
+  "exercise",
+  "movement",
+  "planning",
+  "discipline",
+  "consistency",
+];
+
 function isObjectiveCandidate(value: string): boolean {
   const normalized = normalizeId(value);
   if (!normalized || NON_OBJECTIVE_IDS.has(normalized)) {
@@ -95,6 +129,16 @@ function isObjectiveCandidate(value: string): boolean {
     return false;
   }
   return /[a-z]/.test(normalized);
+}
+
+function actionVerb(objectiveId: string): "reduce" | "strengthen" | "improve" {
+  if (REDUCE_OBJECTIVE_HINTS.some((hint) => objectiveId.includes(hint))) {
+    return "reduce";
+  }
+  if (STRENGTHEN_OBJECTIVE_HINTS.some((hint) => objectiveId.includes(hint))) {
+    return "strengthen";
+  }
+  return "improve";
 }
 
 function collectObjectiveIds(input: InterventionSynthesisInput): string[] {
@@ -200,15 +244,19 @@ function makePlan(params: {
   const effort = effortBucket(params.effortScore);
   const followUp = followUpMinutes(effort);
   const objectiveLabel = toTitle(params.objectiveId);
+  const objectiveSentence = toSentence(params.objectiveId);
+  const verb = actionVerb(params.objectiveId);
 
   const score = clamp01(params.impactScore - params.effortScore * 0.35 - params.riskScore * 0.4);
 
   return {
     id: hashId(`${params.objectiveId}:${score.toFixed(4)}`),
     objectiveIds: [params.objectiveId],
-    action: `In the next 30 minutes, do one 20-minute block on ${objectiveLabel}; log completion as yes/no and one blocker note.`,
+    action:
+      `In the next 30 minutes, run one 20-minute block to ${verb} ${objectiveSentence}; ` +
+      "keep your phone out of reach and log done yes/no plus one blocker note.",
     rationale: `Ranked from dynamic signals: impact=${params.impactScore.toFixed(2)}, effort=${params.effortScore.toFixed(2)}, risk=${params.riskScore.toFixed(2)}.`,
-    expectedImpact: `Projected short-term gain on ${objectiveLabel} is ${(params.impactScore * 100).toFixed(0)}% confidence-weighted improvement.`,
+    expectedImpact: `Projected short-term gain for ${objectiveLabel} is ${(params.impactScore * 100).toFixed(0)}% confidence-weighted improvement.`,
     effort,
     followUpMinutes: followUp,
     evidence: params.references,

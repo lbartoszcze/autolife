@@ -145,7 +145,7 @@ export function buildForecast(input: ForecastAgentInput): Forecast {
     ? adjustedRisk <= 0.35
       ? `With intervention ${intervention.id}, projected trajectory improves materially within ${horizonDays} days, reducing pressure on ${intervention.objectiveIds.map(objectiveLabel).join(", ")}.`
       : `With intervention ${intervention.id}, projected trajectory improves modestly within ${horizonDays} days, but residual risk remains on ${intervention.objectiveIds.map(objectiveLabel).join(", ")}.`
-    : `No intervention-adjusted trajectory available; forecast follows the baseline pattern over ${horizonDays} days.`;
+    : `With a targeted intervention on ${top.map(([id]) => objectiveLabel(id)).join(", ")}, projected trajectory can improve within ${horizonDays} days versus baseline.`;
 
   const dataConfidence = input.state.freshness.completeness * 0.5 + clamp01(1 - input.state.freshness.ageMinutes / (24 * 60)) * 0.2;
   const evidenceConfidence = evidence.length > 0 ? average(evidence.map((finding) => finding.confidence)) * 0.2 : 0.05;

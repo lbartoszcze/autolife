@@ -14,6 +14,8 @@ type RunOptions = {
   record: boolean;
 };
 
+type LooseRecord = Record<string, unknown>;
+
 function parseArgs(argv: string[]): RunOptions {
   const opts: RunOptions = {
     agentId: "main",
@@ -145,6 +147,78 @@ function resolveTraceFile(opts: RunOptions): string {
   return path.resolve(base, "orchestrator-trace.jsonl");
 }
 
+async function readLastTracePayload(tracePath: string): Promise<LooseRecord | undefined> {
+  try {
+    const raw = await fs.readFile(tracePath, "utf-8");
+    const line = raw
+      .trim()
+      .split("\n")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .at(-1);
+    if (!line) {
+      return undefined;
+    }
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+    return parsed as LooseRecord;
+  } catch {
+    return undefined;
+  }
+}
+
+function asRecord(value: unknown): LooseRecord | undefined {
+  return value && typeof value === "object" ? (value as LooseRecord) : undefined;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function topNeedsFromPayload(payload: LooseRecord | undefined, limit = 3): string[] {
+  const state = asRecord(payload?.state);
+  const needs = asRecord(state?.needs);
+  if (!needs) {
+    return [];
+  }
+  return Object.entries(needs)
+    .map(([id, score]) => [id, typeof score === "number" ? score : 0] as const)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([id, score]) => `${id}(${score.toFixed(2)})`);
+}
+
+function evidenceLinks(payload: LooseRecord | undefined, limit = 3): string[] {
+  const evidence = payload?.evidence;
+  if (!Array.isArray(evidence)) {
+    return [];
+  }
+
+  const links: string[] = [];
+  for (const finding of evidence) {
+    const findingObj = asRecord(finding);
+    const refs = findingObj?.references;
+    if (!Array.isArray(refs)) {
+      continue;
+    }
+    for (const ref of refs) {
+      const refObj = asRecord(ref);
+      const title = asString(refObj?.title);
+      const url = asString(refObj?.url);
+      if (title && url) {
+        links.push(`${title} -> ${url}`);
+      }
+      if (links.length >= limit) {
+        return links;
+      }
+    }
+  }
+
+  return links;
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.source) {
@@ -157,6 +231,9 @@ async function main(): Promise<void> {
     throw new Error(`No messages parsed from: ${sourcePath}`);
   }
 
+  const stateFile = resolveStateFile(opts);
+  const traceFile = resolveTraceFile(opts);
+
   const clients = await createWorkspaceAgentClients();
   const { decision, trace } = await runOrchestrator({
     input: {
@@ -164,12 +241,19 @@ async function main(): Promise<void> {
       messages,
       cooldownMinutes: opts.cooldownMinutes,
       maxNudgesPerDay: opts.maxNudgesPerDay,
-      stateFile: resolveStateFile(opts),
-      traceFile: resolveTraceFile(opts),
+      stateFile,
+      traceFile,
       sessionId: path.basename(sourcePath),
     },
     clients,
   });
+
+  const payload = await readLastTracePayload(traceFile);
+  const topNeeds = topNeedsFromPayload(payload);
+  const forecast = asRecord(payload?.forecast);
+  const baseline = asString(forecast?.baseline);
+  const withIntervention = asString(forecast?.withIntervention);
+  const links = evidenceLinks(payload);
 
   console.log("Autlife orchestration run complete.");
   console.log(`source=${sourcePath}`);
@@ -183,6 +267,11 @@ async function main(): Promise<void> {
     console.log(`selected_action=${decision.selected.action}`);
     console.log(`follow_up_minutes=${decision.selected.followUpMinutes}`);
   }
+  console.log("--- summary ---");
+  console.log(`state_top_needs=${topNeeds.length > 0 ? topNeeds.join(", ") : "n/a"}`);
+  console.log(`forecast_baseline=${baseline ?? "n/a"}`);
+  console.log(`forecast_with_intervention=${withIntervention ?? "n/a"}`);
+  console.log(`evidence_links=${links.length > 0 ? links.join(" | ") : "n/a"}`);
   console.log("--- trace ---");
   console.log(JSON.stringify(trace, null, 2));
 }

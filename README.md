@@ -28,6 +28,17 @@ Input format:
 - or OpenAI-style `type: "message"` lines with `message.role` and text content
 - plain text files are treated as user messages
 
+## One-Command Demo
+
+```bash
+pnpm run:intervention -- --source /Users/lukaszbartoszcze/Documents/Autlife/autolife/demo/demo-transcript.jsonl --agent demo-live --state-dir /tmp/autolife-demo-live --record
+```
+
+The CLI prints:
+- gate decision (`should_nudge`, `reason`)
+- selected intervention (`selected_action`, `follow_up_minutes`)
+- judge-friendly summary (`state_top_needs`, `forecast_baseline`, `forecast_with_intervention`, `evidence_links`)
+
 ## Architecture
 
 The system is now a dynamic multi-agent pipeline:
