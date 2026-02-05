@@ -45,6 +45,7 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
   buildTypingThreadParams,
   expandTextLinks,
   normalizeForwardedContext,
@@ -161,12 +162,7 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = threadSpec.id;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-  // For forum topics, provide the base group as parentPeer so bindings for the group
-  // apply to all topics within it (binding inheritance).
-  const parentPeer =
-    isGroup && resolvedThreadId != null
-      ? { kind: "group" as const, id: String(chatId) }
-      : undefined;
+  const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   const route = resolveAgentRoute({
     cfg,
     channel: "telegram",

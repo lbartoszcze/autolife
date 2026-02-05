@@ -40,6 +40,7 @@ import {
 } from "./bot-updates.js";
 import {
   buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
@@ -444,11 +445,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
         : undefined;
       const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-      // For forum topics, provide the base group as parentPeer for binding inheritance.
-      const parentPeer =
-        isGroup && resolvedThreadId != null
-          ? { kind: "group" as const, id: String(chatId) }
-          : undefined;
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
       const route = resolveAgentRoute({
         cfg,
         channel: "telegram",

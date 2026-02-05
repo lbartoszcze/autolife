@@ -50,6 +50,7 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
   resolveTelegramForumThreadId,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -469,11 +470,7 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
-          // For forum topics, provide the base group as parentPeer for binding inheritance.
-          const parentPeer =
-            isGroup && resolvedThreadId != null
-              ? { kind: "group" as const, id: String(chatId) }
-              : undefined;
+          const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
           const route = resolveAgentRoute({
             cfg,
             channel: "telegram",
