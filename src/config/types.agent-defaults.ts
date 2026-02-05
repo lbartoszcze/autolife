@@ -64,8 +64,10 @@ export type HeartbeatLifeCoachConfig = {
   };
   /** Science-backed risk modeling and intervention forecasting. */
   science?: {
-    /** Enable science topic forecasting (default: true). */
+    /** Enable science topic forecasting (default: off). */
     enabled?: boolean;
+    /** Science source mode: dynamic discovery, catalog-only, or hybrid. */
+    mode?: "dynamic" | "catalog" | "hybrid";
     /**
      * Optional JSON catalog file path for custom science topics.
      * Absolute paths are used directly; relative paths resolve from the agent workspace.
@@ -73,6 +75,12 @@ export type HeartbeatLifeCoachConfig = {
     catalogFile?: string;
     /** Minimum confidence threshold for surfacing a science insight (default: 0.35). */
     minConfidence?: number;
+    /** Max PubMed papers to attach for dynamic evidence (default: 3). */
+    maxPapers?: number;
+    /** PubMed fetch timeout in milliseconds (default: 3500). */
+    fetchTimeoutMs?: number;
+    /** Dynamic evidence cache TTL in hours (default: 12). */
+    cacheHours?: number;
   };
 };
 

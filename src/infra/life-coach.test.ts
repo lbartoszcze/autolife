@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { __lifeCoachTestUtils, createLifeCoachHeartbeatPlan, recordLifeCoachDispatch } from "./life-coach.js";
 
@@ -64,6 +64,8 @@ describe("life-coach", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     if (prevStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -98,7 +100,7 @@ describe("life-coach", () => {
         updatedAt: Date.now(),
         sessionFile,
       },
-      lifeCoach: { enabled: true },
+      lifeCoach: { enabled: true, science: { enabled: true, mode: "catalog" } },
     });
 
     expect(plan.prompt).toContain("[AUTOLIFE LIFECOACH]");
@@ -141,7 +143,7 @@ describe("life-coach", () => {
         updatedAt: Date.now(),
         sessionFile,
       },
-      lifeCoach: { enabled: true },
+      lifeCoach: { enabled: true, science: { enabled: true, mode: "catalog" } },
     });
 
     expect(plan.prompt).toContain("[AUTOLIFE SCIENCE]");
@@ -184,7 +186,7 @@ describe("life-coach", () => {
         updatedAt: Date.now(),
         sessionFile,
       },
-      lifeCoach: { enabled: true },
+      lifeCoach: { enabled: true, science: { enabled: true, mode: "catalog" } },
     });
 
     expect(plan.decision).toBeDefined();
@@ -250,13 +252,86 @@ describe("life-coach", () => {
         updatedAt: Date.now(),
         sessionFile,
       },
-      lifeCoach: { enabled: true },
+      lifeCoach: { enabled: true, science: { enabled: true, mode: "catalog" } },
     });
 
     expect(plan.decision).toBeDefined();
     expect(plan.decision?.scienceInsight?.riskId).toBe("gaming-binge");
     expect(plan.prompt).toContain("Detected risk: gaming-binge");
     expect(plan.prompt).toContain("https://example.org/gaming-study");
+  });
+
+  it("discovers science evidence dynamically without any catalog file", async () => {
+    const searchPayload = {
+      esearchresult: {
+        idlist: ["11111111", "22222222"],
+      },
+    };
+    const summaryPayload = {
+      result: {
+        "11111111": { uid: "11111111", title: "Behavior intervention trial A", pubdate: "2021 Jan" },
+        "22222222": { uid: "22222222", title: "Behavior intervention trial B", pubdate: "2023 Mar" },
+      },
+    };
+    const fetchMock = vi.fn().mockImplementation(async (input: unknown) => {
+      const url = String(input);
+      if (url.includes("esearch.fcgi")) {
+        return {
+          ok: true,
+          json: async () => searchPayload,
+        };
+      }
+      if (url.includes("esummary.fcgi")) {
+        return {
+          ok: true,
+          json: async () => summaryPayload,
+        };
+      }
+      return {
+        ok: false,
+        json: async () => ({}),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sessionFile = path.join(tmpDir, "session-dynamic-science.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        buildSessionLine({
+          role: "user",
+          text: "I keep doomscrolling and procrastinating and this pattern is wrecking my focus",
+        }),
+        buildSessionLine({
+          role: "user",
+          text: "I need behavior change support and a practical intervention plan",
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const plan = await createLifeCoachHeartbeatPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      basePrompt: "Base prompt",
+      sessionEntry: {
+        sessionId: "sid",
+        updatedAt: Date.now(),
+        sessionFile,
+      },
+      lifeCoach: { enabled: true, science: { enabled: true, mode: "dynamic" } },
+    });
+
+    expect(plan.prompt).toContain("[AUTOLIFE SCIENCE]");
+    expect(plan.prompt).toContain("Detected risk:");
+    expect(plan.prompt).toContain("https://pubmed.ncbi.nlm.nih.gov/11111111/");
+    expect(fetchMock).toHaveBeenCalled();
   });
 
   it("respects cooldown between nudges", async () => {

@@ -103,6 +103,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
           },
           science: {
             enabled: true,
+            mode: "dynamic", // dynamic | catalog | hybrid
             // catalogFile: ".autolife/science-topics.json",
             minConfidence: 0.4,
           },
@@ -220,9 +221,13 @@ Use `accountId` to target a specific account on multi-account channels like Tele
     - `doneToken`: completion token (default `DONE`).
     - `helpToken`: blocked token (default `NEED_HELP`).
   - `science`: data-driven scientific forecasting and interventions.
-    - `enabled`: toggle science topic modeling (default `true`).
+    - `enabled`: toggle science topic modeling (default `false`).
+    - `mode`: `dynamic` (runtime evidence lookup), `catalog` (external topics only), or `hybrid`.
     - `catalogFile`: optional path to a JSON topic catalog (relative to workspace or absolute).
     - `minConfidence`: confidence threshold for surfacing a science insight.
+    - `maxPapers`: max PubMed papers attached in dynamic mode.
+    - `fetchTimeoutMs`: PubMed fetch timeout for dynamic mode.
+    - `cacheHours`: dynamic evidence cache TTL.
   - `objectives`: weighted priorities for `mood`, `energy`, `focus`, `movement`, `socialMediaReduction`, `stressRegulation`.
   - `interventions.allow` / `interventions.deny`: filter intervention types (`walk`, `social-block`, `focus-sprint`, `breathing`, `hydration`, `smoking-cessation`, `sora-visualization`).
 
@@ -234,7 +239,7 @@ With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop 
 - estimate affect (frustration, distress, momentum) to adapt tone and intervention friction
 - learn user preference affinities from outcomes and user language ("this helped", "don't suggest this")
 - pick a best-fit intervention from a weighted policy
-- inject science-backed risk forecasts and paper links from a data catalog (not hardcoded topic logic)
+- inject science-backed risk forecasts and paper links from dynamic evidence lookup and/or external catalogs
 - send one clear, low-friction action
 - run timed follow-up check-ins
 - include intervention evidence notes and concrete execution hints (timer/blocker/DND/checklist)
@@ -244,12 +249,15 @@ With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop 
 Persistent adaptation state is stored under the OpenClaw state directory:
 `agents/<agent-id>/life-coach-state.json`.
 
-Science topics are loaded only from external catalogs (no built-in topic list):
+Science topics can come from:
+- runtime dynamic discovery (`mode: "dynamic"`)
+- external catalogs (`mode: "catalog"`)
+- both (`mode: "hybrid"`)
+
+External catalog locations:
 - `SCIENCE_TOPICS.json` in workspace root
 - `.autolife/science-topics.json` in workspace
-- or `lifeCoach.science.catalogFile`
-
-If no catalog is present, science insights are skipped for that run.
+- `lifeCoach.science.catalogFile`
 
 Example catalog entry:
 

@@ -89,8 +89,14 @@ export const HeartbeatSchema = z
         science: z
           .object({
             enabled: z.boolean().optional(),
+            mode: z
+              .union([z.literal("dynamic"), z.literal("catalog"), z.literal("hybrid")])
+              .optional(),
             catalogFile: z.string().optional(),
             minConfidence: z.number().min(0).max(1).optional(),
+            maxPapers: z.number().int().positive().max(10).optional(),
+            fetchTimeoutMs: z.number().int().positive().max(60_000).optional(),
+            cacheHours: z.number().positive().max(24 * 30).optional(),
           })
           .strict()
           .optional(),

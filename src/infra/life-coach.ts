@@ -59,6 +59,8 @@ type ScienceInsight = {
   forceIntervention: boolean;
 };
 
+type ScienceMode = "dynamic" | "catalog" | "hybrid";
+
 type LifeCoachStats = Record<
   LifeCoachInterventionId,
   {
@@ -137,6 +139,10 @@ const DEFAULT_ALLOW_SORA = true;
 const DEFAULT_DONE_TOKEN = "DONE";
 const DEFAULT_HELP_TOKEN = "NEED_HELP";
 const DEFAULT_SCIENCE_MIN_CONFIDENCE = 0.35;
+const DEFAULT_SCIENCE_MODE: ScienceMode = "dynamic";
+const DEFAULT_SCIENCE_MAX_PAPERS = 3;
+const DEFAULT_SCIENCE_FETCH_TIMEOUT_MS = 3_500;
+const DEFAULT_SCIENCE_CACHE_HOURS = 12;
 
 const DEFAULT_OBJECTIVES: Record<LifeCoachObjective, number> = {
   mood: 1,
@@ -246,6 +252,53 @@ const OBJECTIVE_KEYWORDS: Record<LifeCoachObjective, string[]> = {
   movement: ["walk", "outside", "exercise", "steps", "workout"],
   socialMediaReduction: ["social media", "instagram", "tiktok", "twitter", "scrolling", "doomscroll"],
   stressRegulation: ["stress", "anxious", "panic", "calm", "overwhelmed"],
+};
+
+const SCIENCE_STOPWORDS = new Set([
+  "about",
+  "after",
+  "again",
+  "also",
+  "always",
+  "because",
+  "been",
+  "before",
+  "being",
+  "between",
+  "could",
+  "did",
+  "does",
+  "doing",
+  "dont",
+  "from",
+  "have",
+  "having",
+  "just",
+  "like",
+  "maybe",
+  "more",
+  "need",
+  "now",
+  "really",
+  "still",
+  "that",
+  "their",
+  "them",
+  "then",
+  "this",
+  "want",
+  "with",
+  "would",
+  "your",
+]);
+
+const OBJECTIVE_LABELS: Record<LifeCoachObjective, string> = {
+  mood: "emotional stability",
+  energy: "energy availability",
+  focus: "attentional control",
+  movement: "physical activity",
+  socialMediaReduction: "impulse control around feeds",
+  stressRegulation: "stress resilience",
 };
 
 const INTERVENTIONS: InterventionSpec[] = [
@@ -446,6 +499,14 @@ const INTERVENTION_BY_ID: Record<LifeCoachInterventionId, InterventionSpec> = IN
   {} as Record<LifeCoachInterventionId, InterventionSpec>,
 );
 
+const SCIENCE_REFERENCE_CACHE = new Map<
+  string,
+  {
+    expiresAt: number;
+    references: ScienceReference[];
+  }
+>();
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -627,13 +688,53 @@ function mergeScienceTopics(base: ScienceTopicSpec[], override: ScienceTopicSpec
   return [...merged.values()];
 }
 
+function resolveScienceMode(lifeCoach?: HeartbeatLifeCoachConfig): ScienceMode {
+  const mode = lifeCoach?.science?.mode;
+  if (mode === "catalog" || mode === "hybrid" || mode === "dynamic") {
+    return mode;
+  }
+  return DEFAULT_SCIENCE_MODE;
+}
+
+function resolveScienceRuntime(lifeCoach?: HeartbeatLifeCoachConfig): {
+  minConfidence: number;
+  maxPapers: number;
+  fetchTimeoutMs: number;
+  cacheMs: number;
+} {
+  const science = lifeCoach?.science;
+  const maxPapersRaw = science?.maxPapers;
+  const fetchTimeoutRaw = science?.fetchTimeoutMs;
+  const cacheHoursRaw = science?.cacheHours;
+  const maxPapers =
+    typeof maxPapersRaw === "number"
+      ? Math.max(1, Math.min(10, Math.floor(maxPapersRaw)))
+      : DEFAULT_SCIENCE_MAX_PAPERS;
+  const fetchTimeoutMs =
+    typeof fetchTimeoutRaw === "number"
+      ? Math.max(500, Math.min(60_000, Math.floor(fetchTimeoutRaw)))
+      : DEFAULT_SCIENCE_FETCH_TIMEOUT_MS;
+  const cacheHours =
+    typeof cacheHoursRaw === "number" ? Math.max(0.1, Math.min(24 * 30, cacheHoursRaw)) : DEFAULT_SCIENCE_CACHE_HOURS;
+  return {
+    minConfidence: clamp01(science?.minConfidence ?? DEFAULT_SCIENCE_MIN_CONFIDENCE),
+    maxPapers,
+    fetchTimeoutMs,
+    cacheMs: cacheHours * 60 * 60_000,
+  };
+}
+
 async function loadScienceTopics(params: {
   cfg: OpenClawConfig;
   agentId: string;
   lifeCoach?: HeartbeatLifeCoachConfig;
 }): Promise<ScienceTopicSpec[]> {
   const scienceCfg = params.lifeCoach?.science;
-  if (scienceCfg?.enabled === false) {
+  if (scienceCfg?.enabled !== true) {
+    return [];
+  }
+  const scienceMode = resolveScienceMode(params.lifeCoach);
+  if (scienceMode === "dynamic") {
     return [];
   }
   const defaultMinConfidence = clamp01(scienceCfg?.minConfidence ?? DEFAULT_SCIENCE_MIN_CONFIDENCE);
@@ -663,6 +764,179 @@ async function loadScienceTopics(params: {
     }
   }
   return topics;
+}
+
+function extractScienceTokens(messages: TranscriptMessage[]): string[] {
+  const text = messages
+    .filter((msg) => msg.role === "user")
+    .slice(-24)
+    .map((msg) => msg.text)
+    .join(" ");
+  const tokens = text.match(/[a-z][a-z0-9'-]{2,}/g) ?? [];
+  return tokens
+    .map((token) => token.toLowerCase())
+    .filter((token) => token.length >= 3 && !SCIENCE_STOPWORDS.has(token));
+}
+
+function summarizeRiskLabel(tokens: string[]): string {
+  const counts = new Map<string, number>();
+  for (const token of tokens) {
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+  }
+  const top = [...counts.entries()]
+    .toSorted((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([token]) => token);
+  if (!top.length) {
+    return "behavior-pattern";
+  }
+  return top.join("-");
+}
+
+function inferScienceIntervention(messages: TranscriptMessage[], needs: LifeCoachNeedScores): LifeCoachInterventionId {
+  const recentUsers = messages.filter((msg) => msg.role === "user").slice(-24);
+  let best: { id: LifeCoachInterventionId; score: number } | undefined;
+  for (const spec of INTERVENTIONS) {
+    const keywordSignal = countMentions(recentUsers, INTERVENTION_KEYWORDS[spec.id]) / Math.max(1, recentUsers.length * 1.5);
+    let objectiveSignal = 0;
+    for (const objective of Object.keys(needs) as LifeCoachObjective[]) {
+      const alignment = spec.objectives[objective] ?? 0.2;
+      const effect = spec.effects[objective] ?? 0;
+      objectiveSignal += needs[objective] * alignment * effect;
+    }
+    const score = keywordSignal * 0.7 + objectiveSignal * 0.3;
+    if (!best || score > best.score) {
+      best = { id: spec.id, score };
+    }
+  }
+  return best?.id ?? "focus-sprint";
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown | undefined> {
+  if (typeof fetch !== "function") {
+    return undefined;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    return (await response.json()) as unknown;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchDynamicScienceReferences(params: {
+  query: string;
+  maxPapers: number;
+  timeoutMs: number;
+  cacheMs: number;
+}): Promise<ScienceReference[]> {
+  const cacheKey = `${params.query}|${params.maxPapers}`;
+  const cached = SCIENCE_REFERENCE_CACHE.get(cacheKey);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.references;
+  }
+  const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&retmode=json&sort=relevance&retmax=${params.maxPapers}&term=${encodeURIComponent(params.query)}`;
+  const searchRaw = await fetchJsonWithTimeout(searchUrl, params.timeoutMs);
+  if (!searchRaw || typeof searchRaw !== "object") {
+    return [];
+  }
+  const idList = ((searchRaw as { esearchresult?: { idlist?: unknown } }).esearchresult?.idlist ?? []) as unknown[];
+  const ids = idList.filter((id): id is string => typeof id === "string" && id.trim().length > 0).slice(0, params.maxPapers);
+  if (!ids.length) {
+    return [];
+  }
+  const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&retmode=json&id=${ids.join(",")}`;
+  const summaryRaw = await fetchJsonWithTimeout(summaryUrl, params.timeoutMs);
+  if (!summaryRaw || typeof summaryRaw !== "object") {
+    return [];
+  }
+  const result = (summaryRaw as { result?: Record<string, unknown> }).result ?? {};
+  const references: ScienceReference[] = [];
+  for (const id of ids) {
+    const entry = result[id];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const typed = entry as { title?: unknown; pubdate?: unknown };
+    const title = typeof typed.title === "string" ? typed.title.trim() : "";
+    if (!title) {
+      continue;
+    }
+    const yearMatch = typeof typed.pubdate === "string" ? typed.pubdate.match(/\b(19|20)\d{2}\b/) : null;
+    const year = yearMatch?.[0];
+    references.push({
+      title: year ? `${title} (${year})` : title,
+      url: `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
+    });
+  }
+  SCIENCE_REFERENCE_CACHE.set(cacheKey, {
+    expiresAt: now + params.cacheMs,
+    references,
+  });
+  return references;
+}
+
+async function deriveDynamicScienceInsight(params: {
+  messages: TranscriptMessage[];
+  needs: LifeCoachNeedScores;
+  affect: LifeCoachAffectScores;
+  lifeCoach?: HeartbeatLifeCoachConfig;
+}): Promise<ScienceInsight | undefined> {
+  const recentUsers = params.messages.filter((msg) => msg.role === "user").slice(-24);
+  if (recentUsers.length === 0) {
+    return undefined;
+  }
+  const runtime = resolveScienceRuntime(params.lifeCoach);
+  const tokens = extractScienceTokens(recentUsers);
+  if (tokens.length < 2) {
+    return undefined;
+  }
+  const riskId = summarizeRiskLabel(tokens);
+  const uniqueTerms = [...new Set(tokens)].slice(0, 6);
+  const query = `${uniqueTerms.join(" ")} behavior intervention randomized trial`;
+  const primaryNeed = (Object.entries(params.needs) as Array<[LifeCoachObjective, number]>).toSorted(
+    (a, b) => b[1] - a[1],
+  )[0]?.[0];
+  const primaryNeedLabel = primaryNeed ? OBJECTIVE_LABELS[primaryNeed] : "day-to-day functioning";
+  const keywordDensity = uniqueTerms.length / 8;
+  const confidence = clamp01(keywordDensity * 0.45 + (primaryNeed ? params.needs[primaryNeed] * 0.35 : 0) + params.affect.distress * 0.2);
+  if (confidence < runtime.minConfidence) {
+    return undefined;
+  }
+  const recommendedIntervention = inferScienceIntervention(recentUsers, params.needs);
+  const references = await fetchDynamicScienceReferences({
+    query,
+    maxPapers: runtime.maxPapers,
+    timeoutMs: runtime.fetchTimeoutMs,
+    cacheMs: runtime.cacheMs,
+  });
+  const trajectoryForecast = `If the current pattern around "${riskId}" continues, ${primaryNeedLabel} is likely to remain constrained over time.`;
+  const improvementForecast = `If intervention is applied consistently and tracked, ${primaryNeedLabel} should improve in the coming weeks.`;
+  const recommendedAction = INTERVENTION_BY_ID[recommendedIntervention].action({
+    needs: params.needs,
+    tone: params.affect.distress > 0.6 ? "supportive" : "direct",
+  });
+  return {
+    riskId,
+    confidence: round2(confidence),
+    trajectoryForecast,
+    improvementForecast,
+    recommendedAction,
+    recommendedIntervention,
+    references,
+    forceIntervention: confidence >= 0.8,
+  };
 }
 
 function extractTextFromContent(content: unknown): string {
@@ -1787,18 +2061,33 @@ export async function createLifeCoachHeartbeatPlan(params: {
     preferences: state.preferences,
   });
   const relapsePressure = computeRelapsePressure(state);
-  const scienceTopics = await loadScienceTopics({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    lifeCoach,
-  });
-  const scienceInsight = deriveScienceInsight({
-    messages,
-    needs,
-    affect,
-    topics: scienceTopics,
-    minConfidence: clamp01(lifeCoach?.science?.minConfidence ?? DEFAULT_SCIENCE_MIN_CONFIDENCE),
-  });
+  const scienceEnabled = lifeCoach.science?.enabled === true;
+  const scienceMode = resolveScienceMode(lifeCoach);
+  let scienceInsight: ScienceInsight | undefined;
+  if (scienceEnabled && scienceMode !== "dynamic") {
+    const scienceTopics = await loadScienceTopics({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      lifeCoach,
+    });
+    if (scienceTopics.length > 0) {
+      scienceInsight = deriveScienceInsight({
+        messages,
+        needs,
+        affect,
+        topics: scienceTopics,
+        minConfidence: resolveScienceRuntime(lifeCoach).minConfidence,
+      });
+    }
+  }
+  if (scienceEnabled && !scienceInsight && scienceMode !== "catalog") {
+    scienceInsight = await deriveDynamicScienceInsight({
+      messages,
+      needs,
+      affect,
+      lifeCoach,
+    });
+  }
 
   const dueFollowUp = findDueFollowUp(state, now);
   if (dueFollowUp) {
