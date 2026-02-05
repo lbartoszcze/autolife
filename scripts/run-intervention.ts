@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { renderSoraPlanToVideo } from "../src/agents/video/local-renderer.js";
 import { createWorkspaceAgentClients, runOrchestrator, type TranscriptMessage } from "../src/orchestrator/index.js";
 
 type RunOptions = {
@@ -9,6 +10,8 @@ type RunOptions = {
   agentId: string;
   stateDir?: string;
   traceFile?: string;
+  videoOut?: string;
+  renderVideo: boolean;
   cooldownMinutes?: number;
   maxNudgesPerDay?: number;
   record: boolean;
@@ -19,6 +22,7 @@ type LooseRecord = Record<string, unknown>;
 function parseArgs(argv: string[]): RunOptions {
   const opts: RunOptions = {
     agentId: "main",
+    renderVideo: true,
     record: false,
   };
 
@@ -38,6 +42,14 @@ function parseArgs(argv: string[]): RunOptions {
     }
     if (arg === "--trace-file" && argv[index + 1]) {
       opts.traceFile = argv[++index];
+      continue;
+    }
+    if (arg === "--video-out" && argv[index + 1]) {
+      opts.videoOut = argv[++index];
+      continue;
+    }
+    if (arg === "--no-render-video") {
+      opts.renderVideo = false;
       continue;
     }
     if (arg === "--cooldown-minutes" && argv[index + 1]) {
@@ -316,6 +328,31 @@ async function main(): Promise<void> {
     clients,
   });
 
+  let renderedVideoPath: string | undefined;
+  let renderedVideoScenes: number | undefined;
+  let renderedVideoDuration: number | undefined;
+  let renderedVideoError: string | undefined;
+
+  if (opts.renderVideo && decision.selected?.videoPlan) {
+    const defaultOutputDir = opts.stateDir
+      ? path.resolve(opts.stateDir, "videos")
+      : path.resolve(process.cwd(), ".autlife", "videos");
+    try {
+      const render = await renderSoraPlanToVideo({
+        plan: decision.selected.videoPlan,
+        traceId: decision.traceId,
+        outputFile: opts.videoOut ? path.resolve(opts.videoOut) : undefined,
+        outputDir: defaultOutputDir,
+      });
+      renderedVideoPath = render.outputFile;
+      renderedVideoScenes = render.sceneCount;
+      renderedVideoDuration = render.durationSeconds;
+      decision.selected.videoPlan.outputFile = render.outputFile;
+    } catch (error) {
+      renderedVideoError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   const payload = await readLastTracePayload(traceFile);
   const topNeeds = topNeedsFromPayload(payload);
   const forecast = asRecord(payload?.forecast);
@@ -353,6 +390,10 @@ async function main(): Promise<void> {
   console.log(`sora_job_id=${sora.jobId ?? "n/a"}`);
   console.log(`sora_call_to_action=${sora.callToAction ?? "n/a"}`);
   console.log(`sora_prompt=${sora.prompt ?? "n/a"}`);
+  console.log(`video_file=${renderedVideoPath ?? "n/a"}`);
+  console.log(`video_scenes=${typeof renderedVideoScenes === "number" ? String(renderedVideoScenes) : "n/a"}`);
+  console.log(`video_duration_seconds=${typeof renderedVideoDuration === "number" ? String(renderedVideoDuration) : "n/a"}`);
+  console.log(`video_render_error=${renderedVideoError ?? "n/a"}`);
   console.log("--- trace ---");
   console.log(JSON.stringify(trace, null, 2));
 }

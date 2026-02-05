@@ -67,6 +67,7 @@ export type SoraVideoPlan = {
   durationSeconds: number;
   callToAction: string;
   jobId?: string;
+  outputFile?: string;
 };
 
 export type InterventionPlan = {

@@ -19,6 +19,8 @@ Optional flags:
 - `--agent <id>`: agent id used for isolated state (default: `main`)
 - `--state-dir <path>`: state directory (stores orchestrator state/trace)
 - `--trace-file <path>`: custom trace JSONL output file
+- `--video-out <path>`: explicit output path for rendered demo video (`.mp4`)
+- `--no-render-video`: skip local mp4 rendering
 - `--cooldown-minutes <n>`: cooldown gate window
 - `--max-nudges-per-day <n>`: pacing gate limit
 - `--record`: persist state between runs (off by default)
@@ -40,6 +42,7 @@ The CLI prints:
 - judge-friendly summary (`state_top_needs`, `forecast_baseline`, `forecast_with_intervention`, `evidence_links`)
 - mentor comparison output (`mentor_figure`, `mentor_takeaway`, `mentor_links`)
 - Sora video brief output (`sora_status`, `sora_title`, `sora_prompt`, `sora_call_to_action`)
+- rendered local demo video output (`video_file`, `video_scenes`, `video_duration_seconds`)
 - detected source coverage (`data_sources`)
 
 ## Architecture
