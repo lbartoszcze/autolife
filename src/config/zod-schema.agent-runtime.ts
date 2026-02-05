@@ -27,6 +27,58 @@ export const HeartbeatSchema = z
     accountId: z.string().optional(),
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
+    lifeCoach: z
+      .object({
+        enabled: z.boolean().optional(),
+        objectives: z
+          .object({
+            mood: z.number().min(0).max(2).optional(),
+            energy: z.number().min(0).max(2).optional(),
+            focus: z.number().min(0).max(2).optional(),
+            movement: z.number().min(0).max(2).optional(),
+            socialMediaReduction: z.number().min(0).max(2).optional(),
+            stressRegulation: z.number().min(0).max(2).optional(),
+          })
+          .strict()
+          .optional(),
+        interventions: z
+          .object({
+            allow: z
+              .array(
+                z.union([
+                  z.literal("walk"),
+                  z.literal("social-block"),
+                  z.literal("focus-sprint"),
+                  z.literal("breathing"),
+                  z.literal("hydration"),
+                  z.literal("sora-visualization"),
+                ]),
+              )
+              .optional(),
+            deny: z
+              .array(
+                z.union([
+                  z.literal("walk"),
+                  z.literal("social-block"),
+                  z.literal("focus-sprint"),
+                  z.literal("breathing"),
+                  z.literal("hydration"),
+                  z.literal("sora-visualization"),
+                ]),
+              )
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        cooldownMinutes: z.number().int().positive().optional(),
+        maxNudgesPerDay: z.number().int().positive().optional(),
+        tone: z
+          .union([z.literal("adaptive"), z.literal("supportive"), z.literal("direct")])
+          .optional(),
+        allowSoraVisualization: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((val, ctx) => {

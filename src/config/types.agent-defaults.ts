@@ -18,6 +18,45 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
 };
 
+export type LifeCoachObjective =
+  | "mood"
+  | "energy"
+  | "focus"
+  | "movement"
+  | "socialMediaReduction"
+  | "stressRegulation";
+
+export type LifeCoachInterventionId =
+  | "walk"
+  | "social-block"
+  | "focus-sprint"
+  | "breathing"
+  | "hydration"
+  | "sora-visualization";
+
+export type HeartbeatLifeCoachConfig = {
+  /** Enable dynamic habit interventions during heartbeat runs. */
+  enabled?: boolean;
+  /** Priority weights for objectives (0..2, default: balanced). */
+  objectives?: Partial<Record<LifeCoachObjective, number>>;
+  /**
+   * Intervention allow/deny lists.
+   * If allow is provided, only those ids are considered.
+   */
+  interventions?: {
+    allow?: LifeCoachInterventionId[];
+    deny?: LifeCoachInterventionId[];
+  };
+  /** Minimum minutes between nudges (default: 90). */
+  cooldownMinutes?: number;
+  /** Daily nudge cap (default: 6). */
+  maxNudgesPerDay?: number;
+  /** Tone strategy for generated nudges. */
+  tone?: "adaptive" | "supportive" | "direct";
+  /** Prefer generating Sora visualization prompts when helpful (default: true). */
+  allowSoraVisualization?: boolean;
+};
+
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
@@ -195,6 +234,8 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /** Dynamic, evidence-inspired intervention planning and nudge adaptation. */
+    lifeCoach?: HeartbeatLifeCoachConfig;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;

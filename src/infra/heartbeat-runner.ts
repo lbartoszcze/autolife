@@ -42,6 +42,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
+import { createLifeCoachHeartbeatPlan, recordLifeCoachDispatch } from "./life-coach.js";
 import {
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
@@ -230,7 +231,25 @@ function resolveHeartbeatConfig(
   if (!defaults && !overrides) {
     return overrides;
   }
-  return { ...defaults, ...overrides };
+  return {
+    ...defaults,
+    ...overrides,
+    lifeCoach:
+      defaults?.lifeCoach || overrides?.lifeCoach
+        ? {
+            ...defaults?.lifeCoach,
+            ...overrides?.lifeCoach,
+            objectives: {
+              ...defaults?.lifeCoach?.objectives,
+              ...overrides?.lifeCoach?.objectives,
+            },
+            interventions: {
+              ...defaults?.lifeCoach?.interventions,
+              ...overrides?.lifeCoach?.interventions,
+            },
+          }
+        : undefined,
+  };
 }
 
 export function resolveHeartbeatSummaryForAgent(
@@ -568,7 +587,20 @@ export async function runHeartbeatOnce(opts: {
   const pendingEvents = isExecEvent ? peekSystemEvents(sessionKey) : [];
   const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
 
-  const prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
+  let prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
+  let lifeCoachDecision: Awaited<ReturnType<typeof createLifeCoachHeartbeatPlan>>["decision"];
+  if (!hasExecCompletion && heartbeat?.lifeCoach?.enabled) {
+    const lifeCoachPlan = await createLifeCoachHeartbeatPlan({
+      cfg,
+      agentId,
+      basePrompt: prompt,
+      sessionEntry: entry,
+      lifeCoach: heartbeat.lifeCoach,
+      nowMs: startedAt,
+    });
+    prompt = lifeCoachPlan.prompt;
+    lifeCoachDecision = lifeCoachPlan.decision;
+  }
   const ctx = {
     Body: prompt,
     From: sender,
@@ -799,6 +831,21 @@ export async function runHeartbeatOnce(opts: {
       ],
       deps: opts.deps,
     });
+
+    if (lifeCoachDecision) {
+      try {
+        await recordLifeCoachDispatch({
+          agentId,
+          decision: lifeCoachDecision,
+          nowMs: startedAt,
+        });
+      } catch (err) {
+        log.warn("heartbeat: failed to record life-coach dispatch", {
+          error: formatErrorMessage(err),
+          agentId,
+        });
+      }
+    }
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
