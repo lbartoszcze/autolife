@@ -244,8 +244,12 @@ With `heartbeat.lifeCoach.enabled: true`, OpenClaw adds a dynamic behavior loop 
 Persistent adaptation state is stored under the OpenClaw state directory:
 `agents/<agent-id>/life-coach-state.json`.
 
-Science catalogs can be provided per workspace via `SCIENCE_TOPICS.json` or
-`.autolife/science-topics.json`, or via `lifeCoach.science.catalogFile`.
+Science topics are loaded only from external catalogs (no built-in topic list):
+- `SCIENCE_TOPICS.json` in workspace root
+- `.autolife/science-topics.json` in workspace
+- or `lifeCoach.science.catalogFile`
+
+If no catalog is present, science insights are skipped for that run.
 
 Example catalog entry:
 

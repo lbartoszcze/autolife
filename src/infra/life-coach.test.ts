@@ -19,6 +19,40 @@ function buildSessionLine(params: { role: "user" | "assistant"; text: string; ti
   });
 }
 
+async function writeScienceCatalog(params: { dir: string; topics: unknown[] }) {
+  await fs.writeFile(
+    path.join(params.dir, "SCIENCE_TOPICS.json"),
+    JSON.stringify(params.topics, null, 2),
+    "utf-8",
+  );
+}
+
+const SMOKING_TOPIC = {
+  id: "smoking",
+  keywords: ["smoke", "smoking", "cigarette", "cigarettes", "nicotine", "vape", "vaping", "tobacco"],
+  objectiveWeights: { stressRegulation: 0.2, focus: 0.1 },
+  confidenceBias: 0.25,
+  minConfidence: 0.35,
+  recommendedIntervention: "smoking-cessation",
+  trajectoryForecast:
+    "If smoking remains daily, long-term cohort evidence suggests roughly 7-10 years lower life expectancy on average.",
+  improvementForecast:
+    "If you start a structured quit plan now, cessation probability increases substantially and long-term excess mortality drops over time.",
+  recommendedAction:
+    "Set a quit date in the next 7 days, remove smoking cues today, and ask a clinician about first-line cessation medication plus support.",
+  references: [
+    {
+      title: "Jha et al. (2013) 21st-Century Hazards of Smoking and Benefits of Cessation",
+      url: "https://pubmed.ncbi.nlm.nih.gov/23343063/",
+    },
+    {
+      title: "Cahill et al. (2016) Nicotine receptor partial agonists for smoking cessation",
+      url: "https://pubmed.ncbi.nlm.nih.gov/27158893/",
+    },
+  ],
+  forceInterventionAtConfidence: 0.55,
+} as const;
+
 describe("life-coach", () => {
   let tmpDir: string;
   let prevStateDir: string | undefined;
@@ -75,6 +109,7 @@ describe("life-coach", () => {
   });
 
   it("injects science forecast and paper links for smoking risk", async () => {
+    await writeScienceCatalog({ dir: tmpDir, topics: [SMOKING_TOPIC] });
     const sessionFile = path.join(tmpDir, "session-smoking-science.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -92,7 +127,13 @@ describe("life-coach", () => {
     );
 
     const plan = await createLifeCoachHeartbeatPlan({
-      cfg: BASE_CFG,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+          },
+        },
+      } as OpenClawConfig,
       agentId: "main",
       basePrompt: "Base prompt",
       sessionEntry: {
@@ -111,6 +152,7 @@ describe("life-coach", () => {
   });
 
   it("prioritizes smoking-cessation intervention when smoking risk confidence is high", async () => {
+    await writeScienceCatalog({ dir: tmpDir, topics: [SMOKING_TOPIC] });
     const sessionFile = path.join(tmpDir, "session-smoking-priority.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -128,7 +170,13 @@ describe("life-coach", () => {
     );
 
     const plan = await createLifeCoachHeartbeatPlan({
-      cfg: BASE_CFG,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+          },
+        },
+      } as OpenClawConfig,
       agentId: "main",
       basePrompt: "Base prompt",
       sessionEntry: {
@@ -145,37 +193,31 @@ describe("life-coach", () => {
   });
 
   it("loads custom science topics dynamically from workspace catalog", async () => {
-    const catalogPath = path.join(tmpDir, "SCIENCE_TOPICS.json");
-    await fs.writeFile(
-      catalogPath,
-      JSON.stringify(
-        [
-          {
-            id: "gaming-binge",
-            keywords: ["gaming", "league", "ranked"],
-            objectiveWeights: { focus: 0.4, mood: 0.2 },
-            confidenceBias: 0.2,
-            minConfidence: 0.3,
-            recommendedIntervention: "focus-sprint",
-            trajectoryForecast: "If late-night gaming keeps expanding, next-day focus and sleep stability may decline.",
-            improvementForecast:
-              "Time-boxed gaming windows plus startup sprints can restore task initiation consistency.",
-            recommendedAction:
-              "Set a hard gaming cutoff tonight and run one 20-minute focus sprint before opening games.",
-            references: [
-              {
-                title: "Sample behavior trial",
-                url: "https://example.org/gaming-study",
-              },
-            ],
-            forceInterventionAtConfidence: 0.5,
-          },
-        ],
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeScienceCatalog({
+      dir: tmpDir,
+      topics: [
+        {
+          id: "gaming-binge",
+          keywords: ["gaming", "league", "ranked"],
+          objectiveWeights: { focus: 0.4, mood: 0.2 },
+          confidenceBias: 0.2,
+          minConfidence: 0.3,
+          recommendedIntervention: "focus-sprint",
+          trajectoryForecast: "If late-night gaming keeps expanding, next-day focus and sleep stability may decline.",
+          improvementForecast:
+            "Time-boxed gaming windows plus startup sprints can restore task initiation consistency.",
+          recommendedAction:
+            "Set a hard gaming cutoff tonight and run one 20-minute focus sprint before opening games.",
+          references: [
+            {
+              title: "Sample behavior trial",
+              url: "https://example.org/gaming-study",
+            },
+          ],
+          forceInterventionAtConfidence: 0.5,
+        },
+      ],
+    });
 
     const sessionFile = path.join(tmpDir, "session-custom-science.jsonl");
     await fs.writeFile(

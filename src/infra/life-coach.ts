@@ -248,105 +248,6 @@ const OBJECTIVE_KEYWORDS: Record<LifeCoachObjective, string[]> = {
   stressRegulation: ["stress", "anxious", "panic", "calm", "overwhelmed"],
 };
 
-const DEFAULT_SCIENCE_TOPICS: ScienceTopicSpec[] = [
-  {
-    id: "smoking",
-    keywords: ["smoke", "smoking", "cigarette", "cigarettes", "nicotine", "vape", "vaping", "tobacco"],
-    objectiveWeights: { stressRegulation: 0.2, focus: 0.1 },
-    confidenceBias: 0.25,
-    minConfidence: 0.35,
-    recommendedIntervention: "smoking-cessation",
-    trajectoryForecast:
-      "If smoking remains daily, long-term cohort evidence suggests roughly 7-10 years lower life expectancy on average.",
-    improvementForecast:
-      "If you start a structured quit plan now, cessation probability increases substantially and long-term excess mortality drops over time.",
-    recommendedAction:
-      "Set a quit date in the next 7 days, remove smoking cues today, and ask a clinician about first-line cessation medication plus support.",
-    references: [
-      {
-        title: "Jha et al. (2013) 21st-Century Hazards of Smoking and Benefits of Cessation",
-        url: "https://pubmed.ncbi.nlm.nih.gov/23343063/",
-      },
-      {
-        title: "Cahill et al. (2016) Nicotine receptor partial agonists for smoking cessation",
-        url: "https://pubmed.ncbi.nlm.nih.gov/27158893/",
-      },
-    ],
-    forceInterventionAtConfidence: 0.55,
-  },
-  {
-    id: "sedentary",
-    keywords: ["sitting", "sedentary", "all day desk", "didn't move", "no exercise"],
-    objectiveWeights: { movement: 0.45 },
-    minConfidence: 0.4,
-    recommendedIntervention: "walk",
-    trajectoryForecast:
-      "Sustained high sitting with low activity predicts higher all-cause mortality risk over the coming years.",
-    improvementForecast:
-      "Adding daily moderate activity can materially attenuate or offset sitting-related mortality risk.",
-    recommendedAction:
-      "Start a daily movement floor now: one 20-minute walk plus a 2-minute movement break each hour.",
-    references: [
-      {
-        title: "Ekelund et al. (2016) Physical activity attenuates sitting-related mortality risk",
-        url: "https://pubmed.ncbi.nlm.nih.gov/27475271/",
-      },
-    ],
-  },
-  {
-    id: "social-media-overuse",
-    keywords: ["social media", "instagram", "tiktok", "twitter", "x.com", "shorts", "doomscroll", "scrolling"],
-    objectiveWeights: { socialMediaReduction: 0.45, focus: 0.1 },
-    minConfidence: 0.45,
-    recommendedIntervention: "social-block",
-    trajectoryForecast:
-      "If compulsive social use persists, odds of low mood and attention fragmentation remain elevated.",
-    improvementForecast:
-      "A short abstinence or strict reduction period can improve well-being and reduce depressive symptoms.",
-    recommendedAction:
-      "Run a 7-day social-media reduction protocol starting now: app blocker windows + one offline replacement activity per urge spike.",
-    references: [
-      {
-        title: "Brailovskaia et al. (2022) One-week social media abstinence RCT",
-        url: "https://pubmed.ncbi.nlm.nih.gov/35512731/",
-      },
-      {
-        title: "Brailovskaia et al. (2026) Meta-analysis: reducing social media use and depressive symptoms",
-        url: "https://pubmed.ncbi.nlm.nih.gov/41294782/",
-      },
-    ],
-  },
-  {
-    id: "stress-load",
-    keywords: [
-      "stressed",
-      "overwhelmed",
-      "anxious",
-      "panic",
-      "burned out",
-      "sleep deprived",
-      "insomnia",
-      "barely slept",
-    ],
-    affectWeights: { distress: 0.35 },
-    objectiveWeights: { stressRegulation: 0.25, mood: 0.1 },
-    minConfidence: 0.45,
-    recommendedIntervention: "breathing",
-    trajectoryForecast:
-      "If high stress remains unregulated, sustained cognitive and emotional load can keep recovery and focus suppressed.",
-    improvementForecast:
-      "Brief daily breathwork can reduce stress and anxiety symptoms within weeks when practiced consistently.",
-    recommendedAction:
-      "Do a 5-minute breath protocol now (slow exhale bias), then repeat twice later today with reminders.",
-    references: [
-      {
-        title: "Fincham et al. (2023) Breathwork improves stress and mental health (meta-analysis)",
-        url: "https://pubmed.ncbi.nlm.nih.gov/36624160/",
-      },
-    ],
-  },
-];
-
 const INTERVENTIONS: InterventionSpec[] = [
   {
     id: "walk",
@@ -736,12 +637,7 @@ async function loadScienceTopics(params: {
     return [];
   }
   const defaultMinConfidence = clamp01(scienceCfg?.minConfidence ?? DEFAULT_SCIENCE_MIN_CONFIDENCE);
-  let topics = DEFAULT_SCIENCE_TOPICS.map((topic) => ({
-    ...topic,
-    minConfidence: clamp01(topic.minConfidence ?? defaultMinConfidence),
-    keywords: [...topic.keywords],
-    references: topic.references ? [...topic.references] : [],
-  }));
+  let topics: ScienceTopicSpec[] = [];
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const configuredPath = scienceCfg?.catalogFile?.trim();
