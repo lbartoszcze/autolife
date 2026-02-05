@@ -1,7 +1,8 @@
 import { buildEvidenceFindings } from "../agents/evidence/evidence-agent.js";
 import { buildForecast } from "../agents/forecast/forecast-agent.js";
-import { synthesizeInterventionPlan } from "../agents/interventions/intervention-agent.js";
+import { synthesizeInterventionPlanDynamic } from "../agents/interventions/intervention-agent.js";
 import { buildUserPreferenceProfile } from "../agents/preferences/preference-agent.js";
+import { loadExternalDataAdapters } from "../agents/state/external-data-connectors.js";
 import {
   assessCurrentState,
   createTranscriptFirstDataSourcesModel,
@@ -28,9 +29,11 @@ export async function createWorkspaceAgentClients(): Promise<OrchestratorAgentCl
 
     async state({ messages, now }) {
       const normalized = toStateMessages(messages);
+      const externalAdapters = await loadExternalDataAdapters({ nowMs: now });
       const dataSources = createTranscriptFirstDataSourcesModel({
         messages: normalized,
         nowMs: now,
+        additionalAdapters: externalAdapters,
       });
       return assessCurrentState({
         nowMs: now,
@@ -54,12 +57,20 @@ export async function createWorkspaceAgentClients(): Promise<OrchestratorAgentCl
     },
 
     async intervention({ state, preferences, evidence, forecast }) {
-      return synthesizeInterventionPlan({
-        state,
-        preferences,
-        evidence,
-        forecast,
-      });
+      return synthesizeInterventionPlanDynamic(
+        {
+          state,
+          preferences,
+          evidence,
+          forecast,
+        },
+        {
+          includeMentorComparison: process.env.AUTLIFE_ENABLE_MENTOR_COMPARISON !== "0",
+          includeSoraVideoPlan: process.env.AUTLIFE_ENABLE_SORA_PLAN !== "0",
+          queueSoraVideo: process.env.AUTLIFE_QUEUE_SORA === "1",
+          soraWebhookUrl: process.env.AUTLIFE_SORA_WEBHOOK_URL,
+        },
+      );
     },
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { synthesizeInterventionPlan } from "./intervention-agent.js";
+import { synthesizeInterventionPlan, synthesizeInterventionPlanDynamic } from "./intervention-agent.js";
 
 const INPUT = {
   state: {
@@ -88,5 +88,65 @@ describe("intervention-agent", () => {
     expect(selected?.action).toMatch(/\d+-minute|\d+ minute/);
     expect(selected?.objectiveIds.length).toBeGreaterThan(0);
     expect(selected?.evidence.every((reference: { url: string }) => reference.url.startsWith("https://"))).toBe(true);
+  });
+
+  it("enriches selected plan with mentor comparison and sora video plan", async () => {
+    const fetchMock = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = String(input);
+      if (url.includes("wbsearchentities")) {
+        return new Response(
+          JSON.stringify({
+            search: [{ id: "Q937", label: "Albert Einstein", description: "German-born theoretical physicist" }],
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("Special:EntityData/Q937.json")) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              Q937: {
+                sitelinks: {
+                  enwiki: {
+                    title: "Albert Einstein",
+                  },
+                },
+                claims: {
+                  P569: [{ mainsnak: { datavalue: { value: { time: "+1879-03-14T00:00:00Z" } } } }],
+                  P570: [{ mainsnak: { datavalue: { value: { time: "+1955-04-18T00:00:00Z" } } } }],
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("/page/summary/Albert%20Einstein")) {
+        return new Response(
+          JSON.stringify({
+            extract:
+              "Albert Einstein developed the theory of relativity. He worked through repeated setbacks before broad acceptance.",
+            content_urls: {
+              desktop: {
+                page: "https://en.wikipedia.org/wiki/Albert_Einstein",
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 200 });
+    };
+
+    const result = await synthesizeInterventionPlanDynamic(INPUT, {
+      fetchImpl: fetchMock as typeof fetch,
+      includeMentorComparison: true,
+      includeSoraVideoPlan: true,
+    });
+
+    expect(result.selected.mentorComparison).toBeDefined();
+    expect(result.selected.mentorComparison?.figure).toBe("Albert Einstein");
+    expect(result.selected.videoPlan).toBeDefined();
+    expect(result.selected.videoPlan?.provider).toBe("sora");
   });
 });

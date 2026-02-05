@@ -6,6 +6,8 @@ import type {
   InterventionPlan,
   UserPreferenceProfile,
 } from "../../contracts.js";
+import { buildMentorComparison } from "../mentor/mentor-agent.js";
+import { buildSoraVideoPlan } from "../video/video-agent.js";
 
 export type InterventionSynthesisInput = {
   state: CurrentStateAssessment;
@@ -13,6 +15,15 @@ export type InterventionSynthesisInput = {
   evidence?: EvidenceFinding[];
   forecast?: Forecast;
   maxCandidates?: number;
+};
+
+export type InterventionEnhancementOptions = {
+  includeMentorComparison?: boolean;
+  includeSoraVideoPlan?: boolean;
+  queueSoraVideo?: boolean;
+  soraWebhookUrl?: string;
+  fetchImpl?: typeof fetch;
+  nowMs?: number;
 };
 
 export type RankedIntervention = InterventionPlan & {
@@ -297,6 +308,52 @@ export function synthesizeInterventionPlan(input: InterventionSynthesisInput): I
     selected,
     alternatives: ranked.slice(1).map(({ score, impactScore, effortScore, riskScore, ...plan }) => plan),
     ranked,
+  };
+}
+
+export async function synthesizeInterventionPlanDynamic(
+  input: InterventionSynthesisInput,
+  options: InterventionEnhancementOptions = {},
+): Promise<InterventionSynthesisResult> {
+  const base = synthesizeInterventionPlan(input);
+  const selected: InterventionPlan = {
+    ...base.selected,
+  };
+
+  if (options.includeMentorComparison ?? true) {
+    selected.mentorComparison = await buildMentorComparison({
+      objectiveIds: selected.objectiveIds,
+      state: input.state,
+      evidence: input.evidence,
+      now: options.nowMs ? new Date(options.nowMs) : undefined,
+      fetchImpl: options.fetchImpl,
+    });
+  }
+
+  if (options.includeSoraVideoPlan ?? true) {
+    selected.videoPlan = await buildSoraVideoPlan({
+      intervention: selected,
+      state: input.state,
+      forecast:
+        input.forecast ?? {
+          horizonDays: 14,
+          baseline: "Baseline trajectory not provided.",
+          withIntervention: "Expected to improve with selected intervention.",
+          assumptions: ["Forecast fallback because no forecast agent output was provided."],
+          confidence: 0.4,
+        },
+      mentorComparison: selected.mentorComparison,
+      queue: options.queueSoraVideo ?? false,
+      webhookUrl: options.soraWebhookUrl,
+      now: options.nowMs,
+      fetchImpl: options.fetchImpl,
+    });
+  }
+
+  return {
+    selected,
+    alternatives: base.alternatives,
+    ranked: base.ranked,
   };
 }
 

@@ -219,6 +219,74 @@ function evidenceLinks(payload: LooseRecord | undefined, limit = 3): string[] {
   return links;
 }
 
+function dataSourceKinds(payload: LooseRecord | undefined): string[] {
+  const state = asRecord(payload?.state);
+  const signals = state?.signals;
+  if (!Array.isArray(signals)) {
+    return [];
+  }
+  const kinds = new Set<string>();
+  for (const signal of signals) {
+    if (typeof signal !== "string") {
+      continue;
+    }
+    const [kind] = signal.split(":");
+    if (kind?.trim()) {
+      kinds.add(kind.trim());
+    }
+  }
+  return [...kinds];
+}
+
+function mentorSummary(payload: LooseRecord | undefined): {
+  figure?: string;
+  topic?: string;
+  takeaway?: string;
+  links: string[];
+} {
+  const selected = asRecord(payload?.selected);
+  const mentor = asRecord(selected?.mentorComparison);
+  if (!mentor) {
+    return { links: [] };
+  }
+
+  const linksRaw = mentor.sourceLinks;
+  const links =
+    Array.isArray(linksRaw)
+      ? linksRaw
+          .map((entry) => (typeof entry === "string" ? entry : undefined))
+          .filter((entry): entry is string => Boolean(entry))
+      : [];
+
+  return {
+    figure: asString(mentor.figure),
+    topic: asString(mentor.topic),
+    takeaway: asString(mentor.takeaway),
+    links,
+  };
+}
+
+function soraSummary(payload: LooseRecord | undefined): {
+  status?: string;
+  title?: string;
+  callToAction?: string;
+  prompt?: string;
+  jobId?: string;
+} {
+  const selected = asRecord(payload?.selected);
+  const video = asRecord(selected?.videoPlan);
+  if (!video) {
+    return {};
+  }
+  return {
+    status: asString(video.status),
+    title: asString(video.title),
+    callToAction: asString(video.callToAction),
+    prompt: asString(video.prompt),
+    jobId: asString(video.jobId),
+  };
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
   if (!opts.source) {
@@ -254,6 +322,9 @@ async function main(): Promise<void> {
   const baseline = asString(forecast?.baseline);
   const withIntervention = asString(forecast?.withIntervention);
   const links = evidenceLinks(payload);
+  const mentor = mentorSummary(payload);
+  const sora = soraSummary(payload);
+  const sources = dataSourceKinds(payload);
 
   console.log("Autlife orchestration run complete.");
   console.log(`source=${sourcePath}`);
@@ -269,9 +340,19 @@ async function main(): Promise<void> {
   }
   console.log("--- summary ---");
   console.log(`state_top_needs=${topNeeds.length > 0 ? topNeeds.join(", ") : "n/a"}`);
+  console.log(`data_sources=${sources.length > 0 ? sources.join(", ") : "transcript-only"}`);
   console.log(`forecast_baseline=${baseline ?? "n/a"}`);
   console.log(`forecast_with_intervention=${withIntervention ?? "n/a"}`);
   console.log(`evidence_links=${links.length > 0 ? links.join(" | ") : "n/a"}`);
+  console.log(`mentor_figure=${mentor.figure ?? "n/a"}`);
+  console.log(`mentor_topic=${mentor.topic ?? "n/a"}`);
+  console.log(`mentor_takeaway=${mentor.takeaway ?? "n/a"}`);
+  console.log(`mentor_links=${mentor.links.length > 0 ? mentor.links.join(" | ") : "n/a"}`);
+  console.log(`sora_status=${sora.status ?? "n/a"}`);
+  console.log(`sora_title=${sora.title ?? "n/a"}`);
+  console.log(`sora_job_id=${sora.jobId ?? "n/a"}`);
+  console.log(`sora_call_to_action=${sora.callToAction ?? "n/a"}`);
+  console.log(`sora_prompt=${sora.prompt ?? "n/a"}`);
   console.log("--- trace ---");
   console.log(JSON.stringify(trace, null, 2));
 }

@@ -8,7 +8,19 @@ export type TranscriptMessage = {
   timestamp?: number;
 };
 
-export type DataSourceKind = "transcript" | "calendar" | "wearables" | "app-usage" | "location";
+export type DataSourceKind =
+  | "transcript"
+  | "calendar"
+  | "wearables"
+  | "app-usage"
+  | "location"
+  | "health"
+  | "gmail"
+  | "messenger"
+  | "imessage"
+  | "photos"
+  | "facebook"
+  | (string & {});
 
 export type DataSignal = {
   sourceId: string;

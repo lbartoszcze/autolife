@@ -14,3 +14,11 @@ export {
   type TranscriptMessage,
   type TranscriptRole,
 } from "./state-agent.js";
+
+export {
+  loadExternalDataAdapters,
+  parseExternalDataSourcesConfig,
+  type ExternalDataSourcesConfig,
+  type ExternalFileConnectorConfig,
+  type ExternalConnectorKind,
+} from "./external-data-connectors.js";

@@ -1,7 +1,9 @@
 export {
   selectInterventionPlan,
+  synthesizeInterventionPlanDynamic,
   synthesizeInterventionPlan,
   synthesizeInterventions,
+  type InterventionEnhancementOptions,
   type InterventionSynthesisInput,
   type InterventionSynthesisResult,
   type RankedIntervention,

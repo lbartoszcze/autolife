@@ -48,6 +48,27 @@ export type Forecast = {
   confidence: number;
 };
 
+export type MentorComparison = {
+  topic: string;
+  figure: string;
+  period?: string;
+  context: string;
+  takeaway: string;
+  sourceLinks: string[];
+  confidence: number;
+};
+
+export type SoraVideoPlan = {
+  provider: "sora";
+  status: "ready" | "queued" | "skipped";
+  title: string;
+  prompt: string;
+  storyboard: string[];
+  durationSeconds: number;
+  callToAction: string;
+  jobId?: string;
+};
+
 export type InterventionPlan = {
   id: string;
   objectiveIds: string[];
@@ -57,6 +78,8 @@ export type InterventionPlan = {
   effort: "low" | "medium" | "high";
   followUpMinutes: number;
   evidence: EvidenceReference[];
+  mentorComparison?: MentorComparison;
+  videoPlan?: SoraVideoPlan;
 };
 
 export type OrchestratorDecision = {

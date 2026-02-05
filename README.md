@@ -38,6 +38,9 @@ The CLI prints:
 - gate decision (`should_nudge`, `reason`)
 - selected intervention (`selected_action`, `follow_up_minutes`)
 - judge-friendly summary (`state_top_needs`, `forecast_baseline`, `forecast_with_intervention`, `evidence_links`)
+- mentor comparison output (`mentor_figure`, `mentor_takeaway`, `mentor_links`)
+- Sora video brief output (`sora_status`, `sora_title`, `sora_prompt`, `sora_call_to_action`)
+- detected source coverage (`data_sources`)
 
 ## Architecture
 
@@ -48,7 +51,36 @@ The system is now a dynamic multi-agent pipeline:
 3. `EvidenceAgent`: retrieves and ranks references with source links.
 4. `ForecastAgent`: predicts baseline vs intervention-adjusted trajectory.
 5. `InterventionAgent`: synthesizes ranked, measurable interventions dynamically.
-6. `Orchestrator`: applies cooldown/pacing/safety gates and emits a deterministic trace.
+6. `MentorEngine`: retrieves dynamic historical/reference comparisons from Wikidata/Wikipedia.
+7. `VideoEngine`: builds Sora-ready video prompts/storyboards and can queue via webhook.
+8. `Orchestrator`: applies cooldown/pacing/safety gates and emits a deterministic trace.
+
+## External Data Sources
+
+Set `AUTLIFE_DATA_SOURCES_FILE` to a JSON config to ingest external telemetry dynamically:
+
+```json
+{
+  "health": { "path": "/absolute/path/health.json", "format": "json" },
+  "gmail": { "path": "/absolute/path/gmail.jsonl", "format": "jsonl" },
+  "messenger": { "path": "/absolute/path/messenger.txt", "format": "text" },
+  "imessage": { "path": "/absolute/path/imessage.json", "format": "json" },
+  "photos": { "path": "/absolute/path/photos.json", "format": "json" },
+  "facebook": { "path": "/absolute/path/facebook.jsonl", "format": "jsonl" },
+  "custom": [{ "kind": "notion", "path": "/absolute/path/notion-export.json", "format": "json" }]
+}
+```
+
+Then run:
+
+```bash
+AUTLIFE_DATA_SOURCES_FILE=/absolute/path/data-sources.json pnpm run:intervention -- --source /absolute/path/to/transcript.jsonl --record
+```
+
+## Sora Integration
+
+- `AUTLIFE_ENABLE_SORA_PLAN=1` (default) includes a Sora video brief in every selected intervention.
+- `AUTLIFE_QUEUE_SORA=1` with `AUTLIFE_SORA_WEBHOOK_URL=https://...` sends the video plan to your render queue.
 
 ## Parallel Codex Streams
 
