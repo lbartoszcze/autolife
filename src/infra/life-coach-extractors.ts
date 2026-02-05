@@ -472,3 +472,9 @@ export function learnPreferencesFromOutcome(params: {
     );
   }
 }
+
+export {
+  selectInterventionPlan,
+  synthesizeInterventionPlan,
+  synthesizeInterventions,
+} from "../agents/interventions/intervention-agent.js";
