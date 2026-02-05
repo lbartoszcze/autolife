@@ -1,3 +1,12 @@
-export { createDefaultAgentPorts } from "./default-agents.js";
-export { runOrchestratorDecision } from "./orchestrator.js";
-export type { AgentPorts, OrchestratorInput, OrchestratorTrace, TranscriptMessage } from "./ports.js";
+export { createWorkspaceAgentClients } from "./agent-clients.js";
+export { createLocalAgentBundle } from "./local-agents.js";
+export {
+  orchestrateDecision,
+  runOrchestrator,
+  type AgentBundle,
+  type OrchestratorAgentClients,
+  type OrchestratorInput,
+  type OrchestratorRunInput,
+  type OrchestratorTrace,
+  type TranscriptMessage,
+} from "./orchestrator.js";

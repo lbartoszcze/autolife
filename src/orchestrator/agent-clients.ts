@@ -1,5 +1,12 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type {
+  CurrentStateAssessment,
+  EvidenceFinding,
+  Forecast,
+  InterventionPlan,
+  UserPreferenceProfile,
+} from "../contracts.js";
 import type { OrchestratorAgentClients, TranscriptMessage } from "./orchestrator.js";
 
 type PreferenceModule = {
@@ -8,20 +15,21 @@ type PreferenceModule = {
     outcomes?: unknown[];
     previous?: unknown;
     now?: number;
-  }) => unknown;
+  }) => UserPreferenceProfile | Promise<UserPreferenceProfile>;
   inferUserPreferenceProfile?: (input: {
     messages: TranscriptMessage[];
     outcomes?: unknown[];
     previous?: unknown;
     now?: number;
     nowMs?: number;
-  }) => unknown;
+  }) => UserPreferenceProfile | Promise<UserPreferenceProfile>;
 };
 
 type StateModule = {
-  assessCurrentState: (input: {
-    transcript: TranscriptMessage[];
-    now?: number;
+  assessCurrentState: (input: unknown) => CurrentStateAssessment | Promise<CurrentStateAssessment>;
+  createTranscriptFirstDataSourcesModel?: (input: {
+    messages: TranscriptMessage[];
+    nowMs?: number;
   }) => unknown;
 };
 
@@ -29,34 +37,87 @@ type EvidenceModule = {
   buildEvidenceFindings: (input: {
     topics: Array<string | { topicId?: string; query: string }>;
     now?: Date;
-  }) => Promise<unknown>;
+  }) => EvidenceFinding[] | Promise<EvidenceFinding[]>;
 };
 
 type ForecastModule = {
   buildForecast: (input: {
-    state: unknown;
-    preferences: unknown;
-    evidence: unknown;
+    state: CurrentStateAssessment;
+    preferences?: UserPreferenceProfile;
+    evidence?: EvidenceFinding[];
     horizonDays?: number;
-  }) => unknown;
+    intervention?: Pick<InterventionPlan, "id" | "objectiveIds" | "expectedImpact" | "effort">;
+  }) => Forecast | Promise<Forecast>;
 };
 
 type InterventionModule = {
-  buildInterventionPlan: (input: {
-    state: unknown;
-    preferences: unknown;
-    evidence: unknown;
-    forecast: unknown;
-  }) => {
-    selected: unknown;
-    alternatives?: unknown[];
-    ranked?: unknown[];
-  };
+  buildInterventionPlan?: (input: {
+    state: CurrentStateAssessment;
+    preferences?: UserPreferenceProfile;
+    evidence?: EvidenceFinding[];
+    forecast?: Forecast;
+  }) =>
+    | {
+        selected: InterventionPlan;
+        alternatives?: InterventionPlan[];
+        ranked?: Array<InterventionPlan & { score?: number }>;
+      }
+    | Promise<{
+        selected: InterventionPlan;
+        alternatives?: InterventionPlan[];
+        ranked?: Array<InterventionPlan & { score?: number }>;
+      }>;
+  synthesizeInterventionPlan?: (input: {
+    state: CurrentStateAssessment;
+    preferences?: UserPreferenceProfile;
+    evidence?: EvidenceFinding[];
+    forecast?: Forecast;
+  }) =>
+    | {
+        selected: InterventionPlan;
+        alternatives?: InterventionPlan[];
+        ranked?: Array<InterventionPlan & { score?: number }>;
+      }
+    | Promise<{
+        selected: InterventionPlan;
+        alternatives?: InterventionPlan[];
+        ranked?: Array<InterventionPlan & { score?: number }>;
+      }>;
 };
 
 async function importModule<T>(filePath: string): Promise<T> {
   const url = pathToFileURL(filePath).href;
   return (await import(url)) as T;
+}
+
+async function maybePromise<T>(value: T | Promise<T>): Promise<T> {
+  return await value;
+}
+
+async function assessState(
+  stateModule: StateModule,
+  messages: TranscriptMessage[],
+  now: number,
+): Promise<CurrentStateAssessment> {
+  if (typeof stateModule.createTranscriptFirstDataSourcesModel === "function") {
+    const dataSources = stateModule.createTranscriptFirstDataSourcesModel({
+      messages,
+      nowMs: now,
+    });
+    return await maybePromise(
+      stateModule.assessCurrentState({
+        nowMs: now,
+        dataSources,
+      }),
+    );
+  }
+
+  return await maybePromise(
+    stateModule.assessCurrentState({
+      transcript: messages,
+      now,
+    }),
+  );
 }
 
 export async function createWorkspaceAgentClients(params?: {
@@ -92,37 +153,58 @@ export async function createWorkspaceAgentClients(params?: {
 
   return {
     async preference({ messages, now }) {
-      return prefBuilder({
-        messages,
-        now,
-      }) as Awaited<ReturnType<OrchestratorAgentClients["preference"]>>;
+      return await maybePromise(
+        prefBuilder({
+          messages,
+          now,
+          nowMs: now,
+        }),
+      );
     },
+
     async state({ messages, now }) {
-      return stateModule.assessCurrentState({
-        transcript: messages,
-        now,
-      }) as Awaited<ReturnType<OrchestratorAgentClients["state"]>>;
+      return await assessState(stateModule, messages, now);
     },
+
     async evidence({ topics, now }) {
-      return (await evidenceModule.buildEvidenceFindings({
-        topics: topics.map((topic) => ({ query: topic })),
-        now: new Date(now),
-      })) as Awaited<ReturnType<OrchestratorAgentClients["evidence"]>>;
+      return await maybePromise(
+        evidenceModule.buildEvidenceFindings({
+          topics: topics.map((topic) => ({ query: topic })),
+          now: new Date(now),
+        }),
+      );
     },
+
     async forecast({ state, preferences, evidence }) {
-      return forecastModule.buildForecast({
-        state,
-        preferences,
-        evidence,
-      }) as Awaited<ReturnType<OrchestratorAgentClients["forecast"]>>;
+      return await maybePromise(
+        forecastModule.buildForecast({
+          state,
+          preferences,
+          evidence,
+        }),
+      );
     },
+
     async intervention({ state, preferences, evidence, forecast }) {
-      return interventionModule.buildInterventionPlan({
-        state,
-        preferences,
-        evidence,
-        forecast,
-      }) as Awaited<ReturnType<OrchestratorAgentClients["intervention"]>>;
+      const buildIntervention =
+        interventionModule.buildInterventionPlan ?? interventionModule.synthesizeInterventionPlan;
+      if (!buildIntervention) {
+        throw new Error("Intervention module does not expose a compatible planner");
+      }
+      const result = await maybePromise(
+        buildIntervention({
+          state,
+          preferences,
+          evidence,
+          forecast,
+        }),
+      );
+
+      return {
+        selected: result.selected,
+        alternatives: result.alternatives ?? [],
+        ranked: result.ranked,
+      };
     },
   };
 }

@@ -1,159 +1,186 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { OrchestratorAgentClients } from "./orchestrator.js";
-import { runOrchestrator } from "./orchestrator.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentBundle } from "./orchestrator.js";
+import { createLocalAgentBundle } from "./local-agents.js";
+import { orchestrateDecision } from "./orchestrator.js";
 
-function buildClients(selectedAction: string): OrchestratorAgentClients {
-  return {
-    async preference() {
-      return {
-        objectiveWeights: { focus: 0.7, sleep: 0.3 },
-        interventionAffinity: {},
-        toneBias: { supportive: 0.4, direct: 0.6 },
-        confidence: 0.7,
-      };
-    },
-    async state() {
-      return {
-        needs: { focus: 0.82 },
-        affect: { frustration: 0.6, distress: 0.55, momentum: 0.3 },
-        signals: ["transcript"],
-        freshness: {
-          capturedAt: Date.now(),
-          ageMinutes: 10,
-          completeness: 0.8,
-        },
-      };
-    },
-    async evidence() {
-      return [
-        {
-          topicId: "focus",
-          claim: "focus interventions help",
-          confidence: 0.72,
-          references: [
-            {
-              title: "Review",
-              url: "https://example.org/review",
-              sourceType: "review" as const,
-            },
-          ],
-        },
-      ];
-    },
-    async forecast() {
-      return {
-        horizonDays: 7,
-        baseline: "baseline",
-        withIntervention: "adjusted",
-        assumptions: ["assume adherence"],
-        confidence: 0.66,
-      };
-    },
-    async intervention() {
-      return {
-        selected: {
-          id: "dyn:focus:low",
-          objectiveIds: ["focus"],
-          action: selectedAction,
-          rationale: "ranked first",
-          expectedImpact: "impact",
-          effort: "low" as const,
-          followUpMinutes: 90,
-          evidence: [],
-        },
-        alternatives: [],
-        ranked: [],
-      };
-    },
-  };
-}
+const NOW = Date.UTC(2026, 1, 5, 12, 0, 0);
+const MESSAGES = [
+  { role: "user" as const, text: "I am overwhelmed and stuck with focus", timestamp: NOW - 10 * 60_000 },
+  { role: "user" as const, text: "sleep has been poor all week", timestamp: NOW - 5 * 60_000 },
+];
 
 describe("orchestrator", () => {
-  let tmpDir: string;
+  let tmpRoot: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "autolife-orchestrator-"));
+    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "autolife-orchestrator-tests-"));
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(tmpRoot, { recursive: true, force: true });
   });
 
-  it("selects a safe intervention and records a deterministic trace", async () => {
-    const stateFile = path.join(tmpDir, "state.json");
-    const traceFile = path.join(tmpDir, "trace.jsonl");
+  it("produces deterministic trace ids for identical inputs", async () => {
+    const bundle = createLocalAgentBundle();
+    const oneDir = path.join(tmpRoot, "run-a");
+    const twoDir = path.join(tmpRoot, "run-b");
 
-    const { decision, trace } = await runOrchestrator({
-      input: {
-        agentId: "main",
-        messages: [{ role: "user", text: "I cannot focus" }],
-        now: 1_000_000,
-        stateFile,
-        traceFile,
-      },
-      clients: buildClients("Run one 15-minute focus sprint now."),
+    const runA = await orchestrateDecision({
+      agentId: "main",
+      messages: MESSAGES,
+      agents: bundle,
+      nowMs: NOW,
+      cooldownMinutes: 0,
+      stateDir: oneDir,
+    });
+    const runB = await orchestrateDecision({
+      agentId: "main",
+      messages: MESSAGES,
+      agents: bundle,
+      nowMs: NOW,
+      cooldownMinutes: 0,
+      stateDir: twoDir,
     });
 
-    expect(decision.shouldNudge).toBe(true);
-    expect(decision.selected?.id).toBe("dyn:focus:low");
-    expect(decision.traceId).toHaveLength(16);
-    expect(trace.reason).toContain("Selected");
-
-    const traceRows = (await fs.readFile(traceFile, "utf-8")).trim().split("\n");
-    expect(traceRows).toHaveLength(1);
+    expect(runA.traceId).toBe(runB.traceId);
   });
 
-  it("blocks nudges during cooldown window", async () => {
-    const stateFile = path.join(tmpDir, "state.json");
-    const traceFile = path.join(tmpDir, "trace.jsonl");
+  it("blocks nudges when cooldown is active", async () => {
+    const bundle = createLocalAgentBundle();
+    const stateDir = path.join(tmpRoot, "cooldown");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "orchestrator-state.json"),
+      JSON.stringify(
+        {
+          lastDispatchByAgent: { main: NOW - 30 * 60_000 },
+          dailyDispatchByAgent: { main: { date: "2026-02-05", count: 1 } },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
-    await runOrchestrator({
-      input: {
-        agentId: "main",
-        messages: [{ role: "user", text: "I cannot focus" }],
-        now: 1_000_000,
-        cooldownMinutes: 120,
-        stateFile,
-        traceFile,
-      },
-      clients: buildClients("Run one 15-minute focus sprint now."),
+    const second = await orchestrateDecision({
+      agentId: "main",
+      messages: MESSAGES,
+      agents: bundle,
+      nowMs: NOW + 30 * 60_000,
+      cooldownMinutes: 120,
+      stateDir,
     });
 
-    const second = await runOrchestrator({
-      input: {
-        agentId: "main",
-        messages: [{ role: "user", text: "Still distracted" }],
-        now: 1_000_000 + 30 * 60_000,
-        cooldownMinutes: 120,
-        stateFile,
-        traceFile,
-      },
-      clients: buildClients("Run one 15-minute focus sprint now."),
-    });
-
-    expect(second.decision.shouldNudge).toBe(false);
-    expect(second.decision.reason).toContain("cooldown");
+    expect(second.shouldNudge).toBe(false);
+    expect(second.reason.toLowerCase()).toContain("cooldown");
   });
 
   it("blocks unsafe recommendations", async () => {
-    const stateFile = path.join(tmpDir, "state.json");
-    const traceFile = path.join(tmpDir, "trace.jsonl");
-
-    const { decision } = await runOrchestrator({
-      input: {
-        agentId: "main",
-        messages: [{ role: "user", text: "Need help" }],
-        now: 2_000_000,
-        stateFile,
-        traceFile,
+    const base = createLocalAgentBundle();
+    const unsafeBundle: AgentBundle = {
+      ...base,
+      intervention: {
+        synthesize: async () => ({
+          selected: {
+            id: "dyn:unsafe:1",
+            objectiveIds: ["focus"],
+            action: "Self-harm to reset behavior.",
+            rationale: "unsafe",
+            expectedImpact: "unsafe",
+            effort: "low",
+            followUpMinutes: 30,
+            evidence: [],
+          },
+          alternatives: [],
+        }),
       },
-      clients: buildClients("Use violence to force task completion."),
+    };
+
+    const decision = await orchestrateDecision({
+      agentId: "main",
+      messages: MESSAGES,
+      agents: unsafeBundle,
+      nowMs: NOW,
+      cooldownMinutes: 0,
+      stateDir: path.join(tmpRoot, "unsafe"),
     });
 
     expect(decision.shouldNudge).toBe(false);
-    expect(decision.reason).toContain("safety");
+    expect(decision.reason.toLowerCase()).toContain("safety");
+  });
+
+  it("calls every agent bundle function once", async () => {
+    const preference = vi.fn(async () => ({
+      objectiveWeights: { focus: 0.6 },
+      interventionAffinity: {},
+      toneBias: { supportive: 0.6, direct: 0.4 },
+      confidence: 0.7,
+    }));
+    const state = vi.fn(async () => ({
+      needs: { focus: 0.8 },
+      affect: { frustration: 0.6, distress: 0.5, momentum: 0.4 },
+      signals: ["focus blocked"],
+      freshness: { capturedAt: NOW, ageMinutes: 0, completeness: 0.8 },
+    }));
+    const evidence = vi.fn(async () => [
+      {
+        topicId: "focus",
+        claim: "evidence",
+        confidence: 0.7,
+        references: [
+          {
+            title: "Paper",
+            url: "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+            sourceType: "paper" as const,
+          },
+        ],
+      },
+    ]);
+    const forecast = vi.fn(async () => ({
+      horizonDays: 14,
+      baseline: "baseline",
+      withIntervention: "with",
+      assumptions: ["a"],
+      confidence: 0.65,
+    }));
+    const intervention = vi.fn(async () => ({
+      selected: {
+        id: "dyn:focus:1",
+        objectiveIds: ["focus"],
+        action: "Run one 10-minute block and log done.",
+        rationale: "state+evidence",
+        expectedImpact: "improved focus",
+        effort: "low" as const,
+        followUpMinutes: 45,
+        evidence: [],
+      },
+      alternatives: [],
+    }));
+
+    const bundle: AgentBundle = {
+      preference: { inferProfile: preference },
+      state: { assess: state },
+      evidence: { find: evidence },
+      forecast: { project: forecast },
+      intervention: { synthesize: intervention },
+    };
+
+    await orchestrateDecision({
+      agentId: "main",
+      messages: MESSAGES,
+      agents: bundle,
+      nowMs: NOW,
+      cooldownMinutes: 0,
+      stateDir: path.join(tmpRoot, "call-counts"),
+    });
+
+    expect(preference).toHaveBeenCalledTimes(1);
+    expect(state).toHaveBeenCalledTimes(1);
+    expect(evidence).toHaveBeenCalledTimes(1);
+    expect(forecast).toHaveBeenCalledTimes(1);
+    expect(intervention).toHaveBeenCalledTimes(1);
   });
 });
