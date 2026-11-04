@@ -1,0 +1,21 @@
+# Every push to main and every pull request runs the typecheck and the whole
+# vitest suite, including tests/cli/video-provider.test.ts: the real
+# run:intervention CLI, run with no OPENAI_API_KEY, must refuse rather than
+# pass a local slideshow off as the Sora video.
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
