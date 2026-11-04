@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "run:intervention": "node --import tsx scripts/run-intervention.ts"
+    "run:intervention": "node --import tsx src/cli/main.ts"
   },
   "devDependencies": {
     "@types/node": "^24.4.0",
@@ -19,6 +19,5 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "packageManager": "pnpm@10.23.0"
+  }
 }

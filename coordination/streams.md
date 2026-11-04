@@ -5,7 +5,6 @@ Each stream owns a strict area to avoid merge conflicts and to keep responsibili
 ## Preference Agent
 
 - Branch: `codex/pref-agent`
-- Worktree: `/Users/lukaszbartoszcze/Documents/Autlife/autolife-pref`
 - Owns:
   - `src/agents/preferences/**`
   - `src/infra/life-coach-extractors.ts` (preference functions only)
@@ -24,7 +23,6 @@ Each stream owns a strict area to avoid merge conflicts and to keep responsibili
 ## State Agent
 
 - Branch: `codex/state-agent`
-- Worktree: `/Users/lukaszbartoszcze/Documents/Autlife/autolife-state`
 - Owns:
   - `src/agents/state/**`
   - `src/infra/life-coach-extractors.ts` (state functions only)
@@ -42,7 +40,6 @@ Each stream owns a strict area to avoid merge conflicts and to keep responsibili
 ## Evidence Agent
 
 - Branch: `codex/evidence-agent`
-- Worktree: `/Users/lukaszbartoszcze/Documents/Autlife/autolife-evidence`
 - Owns:
   - `src/agents/evidence/**`
   - `src/infra/life-coach.ts` (science lookup sections only)
@@ -59,7 +56,6 @@ Each stream owns a strict area to avoid merge conflicts and to keep responsibili
 ## Forecast Agent
 
 - Branch: `codex/forecast-agent`
-- Worktree: `/Users/lukaszbartoszcze/Documents/Autlife/autolife-forecast`
 - Owns:
   - `src/agents/forecast/**`
   - `src/agents/forecast/*.test.ts`
@@ -75,7 +71,6 @@ Each stream owns a strict area to avoid merge conflicts and to keep responsibili
 ## Intervention Agent
 
 - Branch: `codex/intervention-agent`
-- Worktree: `/Users/lukaszbartoszcze/Documents/Autlife/autolife-intervention`
 - Owns:
   - `src/agents/interventions/**`
   - `src/infra/life-coach.ts` (intervention synthesis sections only)
@@ -93,11 +88,10 @@ Each stream owns a strict area to avoid merge conflicts and to keep responsibili
 ## Orchestrator
 
 - Branch: `codex/orchestrator`
-- Worktree: `/Users/lukaszbartoszcze/Documents/Autlife/autolife-orchestrator`
 - Owns:
   - `src/orchestrator/**`
   - `src/infra/life-coach.ts` (top-level orchestration only)
-  - `scripts/run-intervention.ts`
+  - `src/cli/**` (the `run:intervention` command)
 - Build:
   - end-to-end decision engine
 - Must deliver:
@@ -113,7 +107,6 @@ Each stream owns a strict area to avoid merge conflicts and to keep responsibili
 ## QA
 
 - Branch: `codex/qa`
-- Worktree: `/Users/lukaszbartoszcze/Documents/Autlife/autolife-qa`
 - Owns:
   - `src/**/*.test.ts`
   - `tests/**`

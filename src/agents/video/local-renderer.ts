@@ -100,6 +100,16 @@ function runCommand(cmd: string, args: string[]): Promise<void> {
         resolve();
         return;
       }
+      if (stderr.includes("No such filter: 'drawtext'")) {
+        reject(
+          new Error(
+            `no placeholder video was made: ${cmd} has no drawtext filter, so it cannot write the scene text; ` +
+              "put an ffmpeg built with libfreetype first on PATH (for example `brew install ffmpeg-full`), " +
+              "or pass --no-render-video to skip the video",
+          ),
+        );
+        return;
+      }
       reject(new Error(`Command failed (${cmd}) exit=${code}: ${stderr.slice(-600)}`));
     });
   });

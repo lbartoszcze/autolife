@@ -20,10 +20,10 @@ Optional flags:
 - `--state-dir <path>`: state directory (stores orchestrator state/trace)
 - `--trace-file <path>`: custom trace JSONL output file
 - `--video-out <path>`: explicit output path for rendered demo video (`.mp4`)
-- `--video-provider <auto|local|sora>`: choose renderer (`auto` defaults to Sora if `OPENAI_API_KEY` exists, else local)
+- `--video-provider <auto|local|sora>`: choose renderer. `auto` (the default) and `sora` render through the Sora video API only; without `OPENAI_API_KEY` the run is refused with `no Sora render was made: OPENAI_API_KEY is not set …` and exits non-zero, so a placeholder is never reported as the Sora video. `local` renders a placeholder slideshow of the plan with ffmpeg (it needs ffmpeg built with the `drawtext` filter) and reports `video_provider=local-placeholder (not a Sora render)`
 - `--sora-model <sora-2|sora-2-pro>`: model for Sora API render
 - `--sora-size <WxH>`: Sora output size (example: `1280x720`)
-- `--no-render-video`: skip local mp4 rendering
+- `--no-render-video`: skip the video
 - `--cooldown-minutes <n>`: cooldown gate window
 - `--max-nudges-per-day <n>`: pacing gate limit
 - `--record`: persist state between runs (off by default)
@@ -36,7 +36,7 @@ Input format:
 ## One-Command Demo
 
 ```bash
-pnpm run:intervention -- --source /Users/lukaszbartoszcze/Documents/Autlife/autolife/demo/demo-transcript.jsonl --agent demo-live --state-dir /tmp/autolife-demo-live --record
+pnpm run:intervention -- --source demo/demo-transcript.jsonl --agent demo-live --state-dir .autlife/demo-live --record
 ```
 
 The CLI prints:
@@ -45,8 +45,9 @@ The CLI prints:
 - judge-friendly summary (`state_top_needs`, `forecast_baseline`, `forecast_with_intervention`, `evidence_links`)
 - mentor comparison output (`mentor_figure`, `mentor_takeaway`, `mentor_links`)
 - Sora video brief output (`sora_status`, `sora_title`, `sora_prompt`, `sora_call_to_action`)
-- rendered local demo video output (`video_file`, `video_scenes`, `video_duration_seconds`)
+- the rendered video (`video_provider`, `video_file`, `video_duration_seconds`; `video_scenes` for the local placeholder)
 - when Sora API is used: `sora_video_id`, `sora_model`, `sora_size`
+- a field the run has no value for is not printed
 - detected source coverage (`data_sources`)
 
 ## Architecture

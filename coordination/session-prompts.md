@@ -24,7 +24,7 @@ Build the Intervention Agent in this branch. Scope is `src/agents/interventions/
 
 ## Orchestrator Session
 
-Build orchestrator composition in this branch. Scope is `src/orchestrator/**`, top-level integration in `src/infra/life-coach.ts`, and `scripts/run-intervention.ts`. Call all agents, arbitrate conflicts, enforce cooldown, safety, and pacing, log deterministic trace, and output `OrchestratorDecision`. Do not duplicate agent internals.
+Build orchestrator composition in this branch. Scope is `src/orchestrator/**`, top-level integration in `src/infra/life-coach.ts`, and the `run:intervention` command in `src/cli/**`. Call all agents, arbitrate conflicts, enforce cooldown, safety, and pacing, log deterministic trace, and output `OrchestratorDecision`. Do not duplicate agent internals.
 
 ## QA Session
 
