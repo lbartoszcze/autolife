@@ -95,12 +95,8 @@ AUTLIFE_DATA_SOURCES_FILE=/absolute/path/data-sources.json pnpm run:intervention
 pnpm run:intervention -- --source /absolute/path/to/transcript.jsonl --video-provider sora --sora-model sora-2 --sora-size 1280x720
 ```
 
-## Parallel Codex Streams
+## Stream contracts
 
-Create all stream worktrees in one command:
-
-```bash
-./scripts/setup-worktrees.sh
-```
-
-Coordination docs for parallel execution live in `coordination/README.md`.
+The payloads one part of the pipeline hands another are fixed in
+`coordination/contracts.md`, and the quality gate a change passes before
+integration in `coordination/evals/quality-gate.md`.
